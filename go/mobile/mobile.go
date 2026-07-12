@@ -5,6 +5,9 @@
 package mobile
 
 import (
+	"fmt"
+	"path/filepath"
+
 	"github.com/howardkim0/car_monitor/go/internal/device"
 	"github.com/howardkim0/car_monitor/go/internal/obd2"
 	"github.com/howardkim0/car_monitor/go/internal/storage"
@@ -24,26 +27,38 @@ type ReadingListener interface {
 // listener.
 type Session struct {
 	inner *obd2.Session
-	store *storage.FileStore
+	store storage.Store
 }
 
-// NewSession opens (or creates) the JSONL reading log at storagePath and
-// wires up decoding against the default vehicle profile. listener may be
-// nil if the caller only wants readings persisted, not delivered live.
-func NewSession(storagePath string, listener ReadingListener) (*Session, error) {
-	store, err := storage.OpenFileStore(storagePath)
+// NewSession opens (or creates/resumes) the day-rotated CSV reading log
+// under storageDir/readings (see DESIGN.md section 6) and wires up
+// decoding against the default vehicle profile. storageDir is the app's
+// private storage root (Android's filesDir) — this package organizes its
+// own subpaths within it, so callers no longer build a specific file
+// path themselves. listener may be nil if the caller only wants readings
+// persisted, not delivered live.
+func NewSession(storageDir string, listener ReadingListener) (*Session, error) {
+	store, err := storage.OpenFileStore(filepath.Join(storageDir, "readings"))
 	if err != nil {
 		return nil, err
 	}
+	return newSessionWithStore(store, listener), nil
+}
 
+// newSessionWithStore holds the actual reading-pipeline wiring, factored
+// out of NewSession so a test can inject a fake Store — e.g. to exercise
+// the Append-error path below without needing a real filesystem failure.
+func newSessionWithStore(store storage.Store, listener ReadingListener) *Session {
 	s := &Session{store: store}
 	s.inner = obd2.NewSession(vehicle.Default(), func(r obd2.Reading) {
-		_ = s.store.Append(r)
+		if err := s.store.Append(r); err != nil {
+			LogError(fmt.Sprintf("append reading (pid 0x%02X): %v", r.PID, err))
+		}
 		if listener != nil {
 			listener.OnReading(int(r.PID), r.Name, r.Unit, r.Value, r.Timestamp.UnixMilli())
 		}
 	})
-	return s, nil
+	return s
 }
 
 // Feed pushes newly-read bytes from the Bluetooth socket into the session.
@@ -51,18 +66,29 @@ func (s *Session) Feed(data []byte) {
 	s.inner.Feed(data)
 }
 
-// CommandCount returns how many PID request commands the active vehicle
-// profile has. gomobile bind can't return a []string cleanly, so the
-// Android shell polls CommandCount/CommandAt on a timer to build its
-// request loop instead of consuming Commands() directly.
+// CommandCount returns how many commands the session currently wants
+// sent this cycle — either pending PID-discovery queries or, once
+// discovery has resolved, the real per-PID request list (see
+// internal/obd2's two-phase Commands()). gomobile bind can't return a
+// []string cleanly, so the Android shell polls CommandCount/CommandAt on
+// a timer to build its request loop instead of consuming Commands()
+// directly.
+//
+// CommandCount and CommandAt are two separate JNI calls, not one atomic
+// snapshot — since Commands() can now change between them (discovery
+// resolving mid-poll), Kotlin could in principle see a count from before
+// a transition and an index from after. Not fixed: the real fix is a
+// single "return the whole list" call, not worth adding across the JNI
+// boundary for a mismatch that self-heals on the very next poll cycle.
+// See DESIGN.md section 12.
 func (s *Session) CommandCount() int {
 	return len(s.inner.Commands())
 }
 
-// CommandAt returns the i'th PID request command (e.g. "010C"). The caller
-// appends a carriage return and writes it to the Bluetooth socket. Returns
-// "" if i is out of range rather than panicking across the gomobile/JNI
-// boundary.
+// CommandAt returns the i'th command (e.g. "0104" or, during discovery,
+// "0100"). The caller appends a carriage return and writes it to the
+// Bluetooth socket. Returns "" if i is out of range rather than
+// panicking across the gomobile/JNI boundary.
 func (s *Session) CommandAt(i int) string {
 	cmds := s.inner.Commands()
 	if i < 0 || i >= len(cmds) {

@@ -35,7 +35,6 @@ import kotlinx.coroutines.launch
 import mobile.Mobile
 import mobile.ReadingListener
 import mobile.Session
-import java.io.File
 import java.io.IOException
 import java.util.UUID
 import java.util.concurrent.CopyOnWriteArrayList
@@ -93,6 +92,17 @@ class ObdForegroundService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        try {
+            Mobile.initAppLog(filesDir.absolutePath)
+        } catch (e: Throwable) {
+            // Best-effort, and deliberately catching Throwable (not just
+            // Exception): app logging is an optional convenience, and no
+            // failure initializing it — including an Error, e.g. a
+            // corrupt/missing native library — should be able to crash
+            // the whole foreground service and stop monitoring the car
+            // over what is, at worst, a logging feature not working.
+            Log.w(TAG, "Failed to initialize app log", e)
+        }
         createNotificationChannel()
         startForeground(NOTIFICATION_ID, buildNotification(latestState))
     }
@@ -130,6 +140,12 @@ class ObdForegroundService : Service() {
     override fun onDestroy() {
         scope.cancel()
         closeConnection()
+        try {
+            Mobile.closeAppLog()
+        } catch (e: Throwable) {
+            // See onCreate()'s matching catch (Throwable, not Exception).
+            Log.w(TAG, "Failed to close app log", e)
+        }
         super.onDestroy()
     }
 
@@ -205,6 +221,7 @@ class ObdForegroundService : Service() {
                 throw e
             } catch (e: SecurityException) {
                 Log.w(TAG, "Bluetooth permission missing", e)
+                Mobile.logError("Bluetooth permission missing: $e")
                 permissionMissing = true
             } catch (e: Exception) {
                 // Socket/session failure of any kind (IOException from a
@@ -212,6 +229,7 @@ class ObdForegroundService : Service() {
                 // through to the backoff-and-retry below rather than
                 // crashing the service.
                 Log.w(TAG, "Connection attempt failed, will retry", e)
+                Mobile.logError("Connection attempt failed, will retry: $e")
             } finally {
                 closeConnection()
             }
@@ -239,7 +257,9 @@ class ObdForegroundService : Service() {
     }
 
     private fun stopSelfDueToNoConnection() {
-        Log.w(TAG, "No Bluetooth connection in ${NO_CONNECTION_TIMEOUT_MS / 1000}s, stopping")
+        val message = "No Bluetooth connection in ${NO_CONNECTION_TIMEOUT_MS / 1000}s, stopping"
+        Log.w(TAG, message)
+        Mobile.logError(message)
         stopServiceImmediately(ConnectionState.TimedOut)
     }
 
@@ -298,9 +318,8 @@ class ObdForegroundService : Service() {
         val newSocket = device.createRfcommSocketToServiceRecord(SPP_UUID)
         connectSocket(newSocket)
 
-        val storagePath = File(filesDir, "readings.jsonl").absolutePath
         val newSession = try {
-            Mobile.newSession(storagePath, sessionListener)
+            Mobile.newSession(filesDir.absolutePath, sessionListener)
         } catch (e: Exception) {
             newSocket.close()
             throw e
@@ -436,7 +455,13 @@ class ObdForegroundService : Service() {
         private val SPP_UUID: UUID = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
         private const val INITIAL_BACKOFF_MS = 1_000L
         private const val MAX_BACKOFF_MS = 30_000L
-        private const val COMMAND_INTERVAL_MS = 100L
+        // 50ms, not the original 100ms: with up to 32 PIDs now in the
+        // profile (vs. the original 4 — see DESIGN.md section 5.2), a
+        // full cycle at 100ms/command would run ~2.8s+ before even
+        // reaching POLL_CYCLE_MS. Unverified against real ELM327
+        // hardware — no device access in this sandbox, same caveat as
+        // every other Bluetooth-dependent value in this file.
+        private const val COMMAND_INTERVAL_MS = 50L
         private const val POLL_CYCLE_MS = 250L
         private const val PERMISSION_POLL_INTERVAL_MS = 3_000L
         private const val NO_CONNECTION_TIMEOUT_MS = 5 * 60 * 1_000L
