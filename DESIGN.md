@@ -201,6 +201,12 @@ and `jq`, trivial to replace with a real DB later if querying needs grow.
 - User will need to exempt the app from battery optimization
   (`ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS`) for reliable long-run
   background behavior — call this out in-app and in the README.
+- User-initiated stop: a "Stop monitoring" button on the status screen and
+  a "Stop" action on the persistent notification both send the same
+  `ACTION_STOP` intent to `ObdForegroundService`, which tears down the
+  socket/session and removes the notification (`START_NOT_STICKY`, so it
+  does not come back on its own the way a system-triggered kill would).
+  Reopening the app starts monitoring again.
 
 ## 8. Permissions
 

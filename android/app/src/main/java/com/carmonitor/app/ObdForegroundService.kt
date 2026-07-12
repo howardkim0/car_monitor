@@ -17,6 +17,7 @@ import android.os.Build
 import android.os.IBinder
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -82,6 +83,15 @@ class ObdForegroundService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent?.action == ACTION_STOP) {
+            // START_NOT_STICKY: this is a user-requested stop, not the
+            // system killing the service under memory pressure, so it
+            // must not come back on its own the way START_STICKY would.
+            ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
+            stopSelf()
+            return START_NOT_STICKY
+        }
+
         // onStartCommand is always called on the main thread, one call at a
         // time, so checking-and-launching here is inherently race-free —
         // unlike checking `session == null`, which stays true for the
@@ -280,6 +290,12 @@ class ObdForegroundService : Service() {
             Intent(this, StatusActivity::class.java),
             PendingIntent.FLAG_IMMUTABLE
         )
+        val stopIntent = PendingIntent.getService(
+            this,
+            0,
+            Intent(this, ObdForegroundService::class.java).setAction(ACTION_STOP),
+            PendingIntent.FLAG_IMMUTABLE
+        )
         val text = when (state) {
             is ConnectionState.Connecting -> getString(R.string.notification_connecting, Mobile.deviceMAC())
             is ConnectionState.Connected -> getString(R.string.notification_connected, Mobile.deviceMAC())
@@ -291,6 +307,7 @@ class ObdForegroundService : Service() {
             .setContentText(text)
             .setSmallIcon(R.drawable.ic_notification)
             .setContentIntent(contentIntent)
+            .addAction(R.drawable.ic_stop, getString(R.string.notification_stop_action), stopIntent)
             .setOngoing(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .build()
@@ -306,9 +323,15 @@ class ObdForegroundService : Service() {
         private const val COMMAND_INTERVAL_MS = 100L
         private const val POLL_CYCLE_MS = 250L
         private const val PERMISSION_POLL_INTERVAL_MS = 3_000L
+        private const val ACTION_STOP = "com.carmonitor.app.action.STOP"
 
         fun start(context: Context) {
             ContextCompat.startForegroundService(context, Intent(context, ObdForegroundService::class.java))
+        }
+
+        /** Stops monitoring. Reopening the app (or the next boot) starts it again. */
+        fun stop(context: Context) {
+            context.startService(Intent(context, ObdForegroundService::class.java).setAction(ACTION_STOP))
         }
     }
 }

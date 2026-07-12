@@ -27,8 +27,18 @@ class StatusActivity : AppCompatActivity(), ObdForegroundService.StatusListener 
     private lateinit var statusText: TextView
     private lateinit var readingsText: TextView
     private lateinit var batteryOptimizationButton: Button
+    private lateinit var stopButton: Button
 
     private var boundService: ObdForegroundService? = null
+    private var isBound = false
+
+    // Survives rotation (via savedInstanceState) but not a fresh launch, so
+    // rotating right after tapping "Stop" doesn't resurrect the foreground
+    // service through onStart()'s BIND_AUTO_CREATE — while actually
+    // reopening the app still starts monitoring again, as advertised in
+    // R.string.status_stopped.
+    private var stoppedByUser = false
+
     private val latestReadings = linkedMapOf<String, Pair<Double, String>>()
 
     private val serviceConnection = object : ServiceConnection {
@@ -60,19 +70,53 @@ class StatusActivity : AppCompatActivity(), ObdForegroundService.StatusListener 
         readingsText = findViewById(R.id.readingsText)
         batteryOptimizationButton = findViewById(R.id.batteryOptimizationButton)
         batteryOptimizationButton.setOnClickListener { requestBatteryOptimizationExemption() }
+        stopButton = findViewById(R.id.stopButton)
+        stopButton.setOnClickListener { stopMonitoring() }
 
-        requestPermissions.launch(requiredPermissions())
+        stoppedByUser = savedInstanceState?.getBoolean(STATE_STOPPED_BY_USER) ?: false
+        if (stoppedByUser) {
+            statusText.text = getString(R.string.status_stopped)
+            stopButton.visibility = android.view.View.GONE
+        } else {
+            requestPermissions.launch(requiredPermissions())
+        }
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        outState.putBoolean(STATE_STOPPED_BY_USER, stoppedByUser)
+    }
+
+    override fun onRestart() {
+        super.onRestart()
+        // onRestart() only fires when the user brings an already-live
+        // Activity instance back to the foreground (Home then relaunch,
+        // or the recents list) — never on rotation, which fully destroys
+        // and recreates the Activity instead. That's the exact "reopening
+        // the app" this class's stoppedByUser guard needs to distinguish
+        // from a config change, so R.string.status_stopped's promise holds
+        // even when the process was never killed.
+        if (stoppedByUser) {
+            stoppedByUser = false
+            stopButton.visibility = android.view.View.VISIBLE
+            requestPermissions.launch(requiredPermissions())
+        }
     }
 
     override fun onStart() {
         super.onStart()
-        bindService(Intent(this, ObdForegroundService::class.java), serviceConnection, Context.BIND_AUTO_CREATE)
+        if (!stoppedByUser) {
+            isBound = bindService(Intent(this, ObdForegroundService::class.java), serviceConnection, Context.BIND_AUTO_CREATE)
+        }
         updateBatteryOptimizationButtonVisibility()
     }
 
     override fun onStop() {
         boundService?.removeStatusListener(this)
-        unbindService(serviceConnection)
+        if (isBound) {
+            unbindService(serviceConnection)
+            isBound = false
+        }
         boundService = null
         super.onStop()
     }
@@ -98,6 +142,24 @@ class StatusActivity : AppCompatActivity(), ObdForegroundService.StatusListener 
                 getString(R.string.reading_row_format, readingName, formatValue(readingValue), readingUnit)
             }
         }
+    }
+
+    private fun stopMonitoring() {
+        boundService?.removeStatusListener(this)
+        boundService = null
+        if (isBound) {
+            // A Service stays alive as long as it's started OR bound —
+            // stopSelf() alone does nothing while this Activity still
+            // holds a live bind (e.g. tapping Stop without backgrounding
+            // first), so the socket/session would otherwise keep running
+            // silently behind a UI that already says "Stopped."
+            unbindService(serviceConnection)
+            isBound = false
+        }
+        stoppedByUser = true
+        ObdForegroundService.stop(this)
+        statusText.text = getString(R.string.status_stopped)
+        stopButton.visibility = android.view.View.GONE
     }
 
     private fun formatValue(value: Double): String =
@@ -130,5 +192,9 @@ class StatusActivity : AppCompatActivity(), ObdForegroundService.StatusListener 
             Uri.parse("package:$packageName")
         )
         startActivity(intent)
+    }
+
+    companion object {
+        private const val STATE_STOPPED_BY_USER = "stoppedByUser"
     }
 }
