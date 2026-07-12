@@ -126,6 +126,17 @@ EOF
   fi
 }
 
+configure_git_hooks() {
+  local repo_root
+  repo_root="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+  if [ -z "${repo_root}" ]; then
+    log "Not inside a git checkout, skipping git hooks config"
+    return
+  fi
+  log "Configuring git to use githooks/ (gofmt/vet/test/build on every commit)"
+  git -C "${repo_root}" config core.hooksPath githooks
+}
+
 main() {
   need_apt_packages
   install_jdk17
@@ -134,6 +145,7 @@ main() {
   install_gomobile
   install_android_studio
   write_profile_snippet
+  configure_git_hooks
 
   log "Done. Run 'source ~/.bashrc' (or start a new shell) to pick up the toolchain env vars."
 }

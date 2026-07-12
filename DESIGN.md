@@ -280,6 +280,13 @@ cd ../../android
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
 
+`gofmt`, `go vet`, `go test ./...`, and `go build ./...` for the `go/`
+module run automatically on every commit via `githooks/pre-commit` (see
+`CLAUDE.md`). The `gomobile bind` / `gradlew` steps above are not part of
+that hook — they need the Android SDK/NDK and are slow — so run them
+manually whenever a change touches `android/` or `mobile`'s exported
+surface.
+
 ## 12. Open questions / future work
 
 - Where does device/vehicle selection live once it's no longer hardcoded —

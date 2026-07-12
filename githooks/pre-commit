@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# Runs before every commit: vets, tests, and builds the Go module (the
+# actual "app" logic per DESIGN.md) so broken code never lands.
+#
+# Installed via `git config core.hooksPath githooks`, which
+# scripts/setup_ubuntu.sh does automatically. Full Android/APK compilation
+# (gomobile bind + gradlew) needs the Android SDK/NDK and is deliberately
+# not part of this hook — see DESIGN.md section 11 and CLAUDE.md.
+set -euo pipefail
+
+repo_root="$(git rev-parse --show-toplevel)"
+cd "${repo_root}/go"
+
+echo "[pre-commit] gofmt check"
+unformatted="$(gofmt -l .)"
+if [ -n "${unformatted}" ]; then
+  echo "Not gofmt'd:" >&2
+  echo "${unformatted}" >&2
+  exit 1
+fi
+
+echo "[pre-commit] go vet ./..."
+go vet ./...
+
+echo "[pre-commit] go test ./..."
+go test ./...
+
+echo "[pre-commit] go build ./... (app compilation)"
+go build ./...
