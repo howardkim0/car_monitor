@@ -9,6 +9,19 @@ vehicle profiles (`internal/vehicle`), and the reasoning behind them. If a
 change needs to diverge from what's there, update `DESIGN.md` in the same
 change rather than letting the doc and the code drift apart.
 
+## DESIGN.md changes need an Architect pass first
+
+Any edit to `DESIGN.md` — however small — gets an explicit
+Architect-persona review (the same persona from the three-persona review
+below) before it's committed, even if the rest of the change is trivial
+wording. Run it as an actual separate pass, not a mental check while
+writing the diff: does the change fit the existing `go/`/`android/` split
+and the extensibility boundaries in §5, does it contradict something
+elsewhere in the doc, does it accurately describe what the code actually
+does. `DESIGN.md` drifting from the code is exactly what "read the design
+doc first, every time" above is trying to prevent — an unreviewed doc
+change is how that drift starts.
+
 ## Three-persona review before every commit
 
 No code change gets committed on the basis of a single pass. Review it from
@@ -55,21 +68,25 @@ tests, one test file per source file).
 ## Coverage is enforced, not just measured
 
 `githooks/pre-commit` runs `go test -coverprofile=... ./...` and fails the
-commit if total statement coverage drops below `MIN_COVERAGE` (currently
-80%, set at the top of the script) — this repo actually sits around 91%,
-so 80% is a floor against a real regression, not a target to write tests
-down to. If a change legitimately needs the floor raised or lowered,
-change `MIN_COVERAGE` in `githooks/pre-commit` in the same commit and say
-why, rather than working around a failing gate.
+commit if total statement coverage drops below `MIN_COVERAGE` (100%, set
+at the top of the script) — `go/` is small, pure business logic with no
+framework I/O to mock, so 100% is a real, meaningful bar, not a number
+inflated with contrived tests. A `.github/workflows/coverage.yml` re-runs
+the same check on push/PR as a backstop (a bypassed local hook, or a
+fresh clone without hooks configured) and emails on any regression. If a
+change legitimately needs the floor lowered, change `MIN_COVERAGE` in
+`githooks/pre-commit` in the same commit and say why, rather than working
+around a failing gate.
 
-This only covers `go/` — `android/` has no test setup (no JUnit/Robolectric
-target under `android/app/src/test`, no coverage tooling wired into
-`gradlew`), unlike Go's `go test -cover`, which is built into the
-toolchain. Setting one up from scratch (test deps, Android
-framework/lifecycle test doubles, a coverage report step in
-`app/build.gradle.kts`) is a materially bigger lift than extending an
-existing pipeline, and hasn't been done — flag it for a human before
-taking it on rather than assuming it's in scope.
+The 100% gate is `go/`-only. `android/` has its own test setup now (JUnit +
+Robolectric + MockK under `android/app/src/test`, run via
+`./gradlew testDebugUnitTest`; Kover reports coverage via
+`./gradlew koverHtmlReportDebug`) — see DESIGN.md section 13 for why it's
+deliberately not held to the same 100% number: closing five small gaps in
+pure Go functions and exhaustively simulating every Bluetooth/Service
+framework interaction through Robolectric/MockK are not comparable-sized
+tasks. `android/` tests target real regressions (bugs actually found), not
+a percentage.
 
 Full Android/APK compilation (`gomobile bind` + `gradlew assembleDebug`)
 requires the Android SDK/NDK from `scripts/setup_ubuntu.sh` and is
