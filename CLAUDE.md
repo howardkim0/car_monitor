@@ -31,6 +31,17 @@ dedicated review subagent), not three bullet points ticked off in your head.
    screen, error states): would a car owner, not an engineer, understand
    what the app is doing and why?
 
+## Every caught bug gets a regression test
+
+Whenever a bug is caught and fixed — whether it surfaced during the
+three-persona review above, a pre-commit/CI failure, or a human noticing
+something wrong and flagging it — add a unit test that reproduces it (i.e.
+would have failed before the fix), not just the fix itself. This applies
+no matter who or what caught it; "a human found it" or "the fix is
+obviously correct" are not exemptions. For `go/`, follow the existing
+table-driven, one-file-per-source-file convention. The test is what keeps
+the bug fixed after the next refactor, not the fix alone.
+
 ## Tests and build are enforced, not optional
 
 `githooks/pre-commit` (wired up via `git config core.hooksPath githooks`,
