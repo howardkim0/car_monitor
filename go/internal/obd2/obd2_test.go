@@ -84,6 +84,32 @@ func TestFeedIgnoresUnknownPID(t *testing.T) {
 	}
 }
 
+func TestFeedIgnoresModeOutsideResponseRange(t *testing.T) {
+	s, readings := collectingSession()
+
+	// Two valid hex fields, but 0x7F ("general reject", an ELM327/OBD2
+	// negative response code) isn't in the 0x41-0x49 positive-response
+	// range parseLine requires.
+	s.Feed([]byte("7F 0C\r"))
+
+	if len(*readings) != 0 {
+		t.Errorf("got %d readings from an out-of-range mode byte, want 0: %+v", len(*readings), *readings)
+	}
+}
+
+func TestFeedIgnoresDecodeError(t *testing.T) {
+	s, readings := collectingSession()
+
+	// Known PID (0x0D, speed) but no data bytes — decodeSpeed errors on
+	// too-short input, so parseLine must reject the line rather than
+	// panic or emit a zero-value Reading.
+	s.Feed([]byte("41 0D\r"))
+
+	if len(*readings) != 0 {
+		t.Errorf("got %d readings from an undecodable line, want 0: %+v", len(*readings), *readings)
+	}
+}
+
 func TestFeedMultipleReadingsInOneCall(t *testing.T) {
 	s, readings := collectingSession()
 

@@ -54,6 +54,17 @@ func TestSessionFeedNotifiesListenerAndPersists(t *testing.T) {
 	}
 }
 
+func TestNewSessionPropagatesStorageError(t *testing.T) {
+	// A missing parent directory makes storage.OpenFileStore fail;
+	// NewSession must surface that rather than panicking or returning a
+	// half-initialized Session.
+	path := filepath.Join(t.TempDir(), "no-such-subdir", "readings.jsonl")
+
+	if _, err := NewSession(path, nil); err == nil {
+		t.Error("NewSession with an unwritable storage path should error, got nil")
+	}
+}
+
 func TestSessionCommands(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "readings.jsonl")
 	session, err := NewSession(path, nil)

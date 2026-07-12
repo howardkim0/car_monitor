@@ -2,6 +2,7 @@ package storage
 
 import (
 	"bufio"
+	"math"
 	"os"
 	"path/filepath"
 	"testing"
@@ -89,6 +90,34 @@ func TestAppendIsActuallyAppendOnly(t *testing.T) {
 	}
 	if lines != 2 {
 		t.Fatalf("got %d lines after two separate opens, want 2 (reopening must not truncate)", lines)
+	}
+}
+
+func TestOpenFileStoreErrorsOnMissingParentDir(t *testing.T) {
+	// No O_CREATE flag can make a missing parent directory appear —
+	// os.OpenFile must surface that as an error, not panic or silently
+	// succeed.
+	path := filepath.Join(t.TempDir(), "no-such-subdir", "readings.jsonl")
+
+	if _, err := OpenFileStore(path); err == nil {
+		t.Error("OpenFileStore with a missing parent directory should error, got nil")
+	}
+}
+
+func TestAppendErrorsOnUnmarshalableReading(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "readings.jsonl")
+
+	store, err := OpenFileStore(path)
+	if err != nil {
+		t.Fatalf("OpenFileStore: %v", err)
+	}
+	defer store.Close()
+
+	// encoding/json refuses to marshal non-finite floats; Reading.Value is
+	// a plain float64, so this is a real, reachable failure mode, not a
+	// contrived one.
+	if err := store.Append(obd2.Reading{PID: 0x0C, Value: math.NaN()}); err == nil {
+		t.Error("Append with a NaN Value should error, got nil")
 	}
 }
 

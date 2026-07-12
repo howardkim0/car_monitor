@@ -9,10 +9,10 @@
 set -euo pipefail
 
 # Statement-coverage floor for `go test -cover ./...`, enforced below.
-# 80 leaves headroom under the ~91% total this repo actually sits at
-# (see CLAUDE.md's "Coverage is enforced, not just measured" section) —
-# it's a floor against real regressions, not a target to hug.
-MIN_COVERAGE=80
+# 100: every branch in go/ is small, pure business logic with no framework
+# I/O to mock, so there's no legitimate gap to leave headroom for — see
+# CLAUDE.md's "Coverage is enforced, not just measured" section.
+MIN_COVERAGE=100
 
 repo_root="$(git rev-parse --show-toplevel)"
 cd "${repo_root}/go"

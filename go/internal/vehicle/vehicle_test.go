@@ -55,6 +55,10 @@ func TestDecodeSpeed(t *testing.T) {
 	if want := 80.0; got != want {
 		t.Errorf("decodeSpeed(0x50) = %v, want %v", got, want)
 	}
+
+	if _, err := pid.Decode([]byte{}); err == nil {
+		t.Error("Decode with 0 bytes should error, speed needs 1")
+	}
 }
 
 func TestDecodeCoolantTemp(t *testing.T) {
@@ -69,6 +73,10 @@ func TestDecodeCoolantTemp(t *testing.T) {
 	}
 	if want := 83.0; got != want {
 		t.Errorf("decodeCoolantTemp(0x7B) = %v, want %v", got, want)
+	}
+
+	if _, err := pid.Decode([]byte{}); err == nil {
+		t.Error("Decode with 0 bytes should error, coolant temp needs 1")
 	}
 }
 
@@ -93,5 +101,9 @@ func TestDecodeThrottlePosition(t *testing.T) {
 		if got != tt.want {
 			t.Errorf("decodeThrottlePosition(%v) = %v, want %v", tt.data, got, tt.want)
 		}
+	}
+
+	if _, err := pid.Decode([]byte{}); err == nil {
+		t.Error("Decode with 0 bytes should error, throttle position needs 1")
 	}
 }
