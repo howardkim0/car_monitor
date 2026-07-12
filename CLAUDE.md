@@ -46,11 +46,30 @@ the bug fixed after the next refactor, not the fix alone.
 
 `githooks/pre-commit` (wired up via `git config core.hooksPath githooks`,
 which `scripts/setup_ubuntu.sh` does automatically) runs `gofmt`, `go vet`,
-`go test ./...`, and `go build ./...` for the `go/` module on every commit.
-Don't bypass it with `--no-verify` — fix the failure instead. Any new
-package under `go/` needs unit tests before it's committed, matching the
-existing packages' style (table-driven tests, one test file per source
-file).
+`go test ./...` (with the coverage gate below), and `go build ./...` for
+the `go/` module on every commit. Don't bypass it with `--no-verify` — fix
+the failure instead. Any new package under `go/` needs unit tests before
+it's committed, matching the existing packages' style (table-driven
+tests, one test file per source file).
+
+## Coverage is enforced, not just measured
+
+`githooks/pre-commit` runs `go test -coverprofile=... ./...` and fails the
+commit if total statement coverage drops below `MIN_COVERAGE` (currently
+80%, set at the top of the script) — this repo actually sits around 91%,
+so 80% is a floor against a real regression, not a target to write tests
+down to. If a change legitimately needs the floor raised or lowered,
+change `MIN_COVERAGE` in `githooks/pre-commit` in the same commit and say
+why, rather than working around a failing gate.
+
+This only covers `go/` — `android/` has no test setup (no JUnit/Robolectric
+target under `android/app/src/test`, no coverage tooling wired into
+`gradlew`), unlike Go's `go test -cover`, which is built into the
+toolchain. Setting one up from scratch (test deps, Android
+framework/lifecycle test doubles, a coverage report step in
+`app/build.gradle.kts`) is a materially bigger lift than extending an
+existing pipeline, and hasn't been done — flag it for a human before
+taking it on rather than assuming it's in scope.
 
 Full Android/APK compilation (`gomobile bind` + `gradlew assembleDebug`)
 requires the Android SDK/NDK from `scripts/setup_ubuntu.sh` and is

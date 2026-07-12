@@ -8,6 +8,12 @@
 # not part of this hook — see DESIGN.md section 11 and CLAUDE.md.
 set -euo pipefail
 
+# Statement-coverage floor for `go test -cover ./...`, enforced below.
+# 80 leaves headroom under the ~91% total this repo actually sits at
+# (see CLAUDE.md's "Coverage is enforced, not just measured" section) —
+# it's a floor against real regressions, not a target to hug.
+MIN_COVERAGE=80
+
 repo_root="$(git rev-parse --show-toplevel)"
 cd "${repo_root}/go"
 
@@ -22,8 +28,18 @@ fi
 echo "[pre-commit] go vet ./..."
 go vet ./...
 
-echo "[pre-commit] go test ./..."
-go test ./...
+echo "[pre-commit] go test ./... (coverage gate: ${MIN_COVERAGE}%)"
+coverage_file="$(mktemp)"
+trap 'rm -f "${coverage_file}"' EXIT
+go test -coverprofile="${coverage_file}" ./...
+total="$(go tool cover -func="${coverage_file}" | tail -1 | awk '{print $NF}' | tr -d '%')"
+awk -v total="${total}" -v min="${MIN_COVERAGE}" 'BEGIN {
+  if (total + 0 < min + 0) {
+    printf "Total statement coverage %.1f%% is below the required %d%% minimum\n", total, min > "/dev/stderr"
+    exit 1
+  }
+  printf "Total statement coverage: %.1f%% (minimum %d%%)\n", total, min
+}'
 
 echo "[pre-commit] go build ./... (app compilation)"
 go build ./...
