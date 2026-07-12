@@ -15,6 +15,7 @@ import android.content.pm.PackageManager
 import android.os.Binder
 import android.os.Build
 import android.os.IBinder
+import android.os.SystemClock
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
@@ -123,13 +124,23 @@ class ObdForegroundService : Service() {
     /**
      * Connect, run the read/write loops until the socket fails, then
      * reconnect with exponential backoff (capped) per DESIGN.md section 7.
-     * Never lets an exception escape and kill the service.
+     * Never lets an exception escape and kill the service — except that if
+     * NO_CONNECTION_TIMEOUT_MS elapses without ever reaching Connected
+     * (permission wait time counts too), the service stops itself rather
+     * than retrying forever against a dongle that's never going to answer.
      */
     private suspend fun connectionLoop() {
         var backoffMs = INITIAL_BACKOFF_MS
+        // elapsedRealtime(), not wall-clock time: immune to the user (or
+        // NTP) changing the system clock mid-wait.
+        var lastConnectedAt = SystemClock.elapsedRealtime()
 
         while (scope.isActive) {
             if (!hasBluetoothPermission()) {
+                if (SystemClock.elapsedRealtime() - lastConnectedAt >= NO_CONNECTION_TIMEOUT_MS) {
+                    stopSelfDueToNoConnection()
+                    return
+                }
                 updateState(ConnectionState.PermissionMissing)
                 delay(PERMISSION_POLL_INTERVAL_MS)
                 continue
@@ -142,6 +153,7 @@ class ObdForegroundService : Service() {
                 socket = handles.socket
                 session = handles.session
                 backoffMs = INITIAL_BACKOFF_MS
+                lastConnectedAt = SystemClock.elapsedRealtime()
                 updateState(ConnectionState.Connected)
                 runSessionLoops(handles.socket, handles.session)
             } catch (e: SecurityException) {
@@ -158,9 +170,18 @@ class ObdForegroundService : Service() {
             }
 
             if (permissionMissing) {
+                if (SystemClock.elapsedRealtime() - lastConnectedAt >= NO_CONNECTION_TIMEOUT_MS) {
+                    stopSelfDueToNoConnection()
+                    return
+                }
                 updateState(ConnectionState.PermissionMissing)
                 delay(PERMISSION_POLL_INTERVAL_MS)
                 continue
+            }
+
+            if (SystemClock.elapsedRealtime() - lastConnectedAt >= NO_CONNECTION_TIMEOUT_MS) {
+                stopSelfDueToNoConnection()
+                return
             }
 
             val retrySeconds = (backoffMs / 1000).toInt()
@@ -168,6 +189,13 @@ class ObdForegroundService : Service() {
             delay(backoffMs)
             backoffMs = (backoffMs * 2).coerceAtMost(MAX_BACKOFF_MS)
         }
+    }
+
+    /** Same teardown the ACTION_STOP path uses — see onStartCommand(). */
+    private fun stopSelfDueToNoConnection() {
+        Log.w(TAG, "No Bluetooth connection in ${NO_CONNECTION_TIMEOUT_MS / 1000}s, stopping")
+        ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
+        stopSelf()
     }
 
     private fun hasBluetoothPermission(): Boolean {
@@ -323,6 +351,7 @@ class ObdForegroundService : Service() {
         private const val COMMAND_INTERVAL_MS = 100L
         private const val POLL_CYCLE_MS = 250L
         private const val PERMISSION_POLL_INTERVAL_MS = 3_000L
+        private const val NO_CONNECTION_TIMEOUT_MS = 5 * 60 * 1_000L
         private const val ACTION_STOP = "com.carmonitor.app.action.STOP"
 
         fun start(context: Context) {

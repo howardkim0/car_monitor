@@ -198,6 +198,11 @@ and `jq`, trivial to replace with a real DB later if querying needs grow.
   any foreground service) with current connection state.
 - On socket error/disconnect: exponential backoff reconnect loop, capped
   (e.g. 30s max), rather than a tight retry loop draining the battery.
+- If no connection is ever reached (or re-reached) within 5 minutes —
+  counting time spent waiting on a missing Bluetooth permission too — the
+  service stops itself via the same teardown path as the user-initiated
+  stop below, rather than retrying indefinitely against a dongle that's
+  never going to answer (car parked out of range, dongle unplugged, etc).
 - User will need to exempt the app from battery optimization
   (`ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS`) for reliable long-run
   background behavior — call this out in-app and in the README.
