@@ -1,6 +1,7 @@
-# Android/Gradle build output. Exception: android/car-monitor-debug.apk is
-# intentionally tracked (see DESIGN.md section 11, "Pre-built APK") — don't
-# add a blanket *.apk rule here without carving that path back out.
+# Android/Gradle build output. Debug APKs are published to GitHub Releases
+# by .github/workflows/release-apk.yml (see DESIGN.md section 11, "Pre-built
+# APK"), not committed — this covers both the standard build dir and a
+# locally built copy at the repo root.
 android/build/
 android/app/build/
 android/.gradle/
@@ -11,3 +12,4 @@ android/.idea/
 android/*.iml
 android/app/*.iml
 android/captures/
+android/*.apk

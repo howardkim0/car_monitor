@@ -1,0 +1,35 @@
+name: Set up Go, JDK, gomobile, and the Android NDK
+description: >
+  Shared setup for any workflow job that runs `gomobile bind` against
+  go/mobile: installs Go, Temurin 17, gomobile/gobind, and the pinned
+  Android NDK, then runs `gomobile init`. Keeps the NDK version pin in one
+  place across workflows instead of duplicated per job (see DESIGN.md
+  section 10 / scripts/setup_ubuntu.sh for the same pin used for local
+  dev — that one is intentionally separate, since it documents the local
+  toolchain setup rather than CI).
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-go@v5
+      with:
+        go-version: "1.26.5"
+
+    - uses: actions/setup-java@v4
+      with:
+        distribution: temurin
+        java-version: "17"
+
+    - name: Install gomobile/gobind
+      shell: bash
+      run: |
+        go install golang.org/x/mobile/cmd/gomobile@latest
+        go install golang.org/x/mobile/cmd/gobind@latest
+        echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+    # ubuntu-latest ships a pre-installed Android SDK at $ANDROID_HOME,
+    # but not the NDK gomobile bind needs for cgo cross-compilation.
+    - name: Install Android NDK and run gomobile init
+      shell: bash
+      run: |
+        "${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager" --install "ndk;26.1.10909125"
+        ANDROID_NDK_HOME="${ANDROID_HOME}/ndk/26.1.10909125" gomobile init

@@ -1,0 +1,62 @@
+# Builds a debug-signed APK and publishes it to the repo's GitHub Releases
+# page, replacing the old approach of committing the binary directly to
+# main (see DESIGN.md section 11, "Pre-built APK", for why and the
+# tradeoffs of each approach).
+#
+# Publishes to a single rolling "latest" release/tag on every push to main
+# that could change the built app, rather than requiring a version tag —
+# this mirrors the old committed-binary behavior of "always up to date with
+# main" without needing any tagging discipline.
+name: Release APK
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "android/**"
+      - "go/**"
+      - ".github/workflows/release-apk.yml"
+
+# The "latest" release/tag is deleted and recreated every run (see the last
+# step below) — without this, two pushes to main close together can race on
+# that delete+create, and whichever run's `gh release create` loses the race
+# fails outright, leaving "latest" pointing at the older commit. Only ever
+# let the newest push's run actually build.
+concurrency:
+  group: release-apk
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    name: Build and publish debug APK
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/setup-gomobile-android
+
+      - name: Build mobile.aar
+        working-directory: go/mobile
+        run: gomobile bind -androidapi 26 -o ../../android/app/libs/mobile.aar -target=android ./...
+
+      - name: Build debug APK
+        working-directory: android
+        run: ./gradlew assembleDebug --console=plain
+
+      - name: Publish to the "latest" release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          apk_src="android/app/build/outputs/apk/debug/app-debug.apk"
+          apk_out="android/app/build/outputs/apk/debug/car-monitor-debug.apk"
+          cp "$apk_src" "$apk_out"
+
+          gh release delete latest --yes --cleanup-tag || true
+          gh release create latest "$apk_out" \
+            --target "${{ github.sha }}" \
+            --title "Latest build ($(date -u +%Y-%m-%dT%H:%MZ))" \
+            --notes "Auto-built from commit ${{ github.sha }}. Debug-signed, for sideloading only — see DESIGN.md section 11." \
+            --prerelease

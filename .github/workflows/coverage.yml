@@ -70,27 +70,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-go@v5
-        with:
-          go-version: "1.26.5"
-
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: "17"
-
-      - name: Install gomobile/gobind
-        run: |
-          go install golang.org/x/mobile/cmd/gomobile@latest
-          go install golang.org/x/mobile/cmd/gobind@latest
-          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
-
-      # ubuntu-latest ships a pre-installed Android SDK at $ANDROID_HOME,
-      # but not the NDK gomobile bind needs for cgo cross-compilation.
-      - name: Install Android NDK and run gomobile init
-        run: |
-          "${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager" --install "ndk;26.1.10909125"
-          ANDROID_NDK_HOME="${ANDROID_HOME}/ndk/26.1.10909125" gomobile init
+      - uses: ./.github/actions/setup-gomobile-android
 
       - name: Build mobile.aar
         working-directory: go/mobile
