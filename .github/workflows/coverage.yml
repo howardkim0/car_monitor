@@ -1,0 +1,108 @@
+# Re-runs the same coverage check githooks/pre-commit does, as a backstop
+# for a bypassed local hook or a fresh clone without hooks configured (see
+# CLAUDE.md's "Coverage is enforced" section and DESIGN.md section 13).
+#
+# Required repo secrets (Settings -> Secrets and variables -> Actions),
+# only needed if go-coverage's check ever actually fails — it's a Gmail
+# account with an app password (not the account password itself):
+#   MAIL_USERNAME  the sending Gmail address
+#   MAIL_PASSWORD  a Gmail app password for that address
+name: Coverage
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  go-coverage:
+    name: Go coverage (100% gate)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.5"
+
+      - name: Run tests with coverage
+        id: coverage
+        working-directory: go
+        run: |
+          go test -coverprofile=coverage.out ./...
+          total="$(go tool cover -func=coverage.out | tail -1 | awk '{print $NF}' | tr -d '%')"
+          echo "Total statement coverage: ${total}%"
+          echo "total=${total}" >> "$GITHUB_OUTPUT"
+
+      - name: Check 100% floor
+        id: check
+        run: |
+          below="$(awk -v t="${{ steps.coverage.outputs.total }}" 'BEGIN { print (t + 0 < 100) ? "true" : "false" }')"
+          echo "below=${below}" >> "$GITHUB_OUTPUT"
+
+      - name: Email on regression
+        if: steps.check.outputs.below == 'true'
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          username: ${{ secrets.MAIL_USERNAME }}
+          password: ${{ secrets.MAIL_PASSWORD }}
+          from: Car Monitor CI <${{ secrets.MAIL_USERNAME }}>
+          to: tbphotography4761@gmail.com
+          subject: "car_monitor: Go coverage dropped to ${{ steps.coverage.outputs.total }}%"
+          body: |
+            go/ statement coverage is ${{ steps.coverage.outputs.total }}%, below the 100% floor
+            required by githooks/pre-commit and CLAUDE.md.
+
+            Commit: ${{ github.sha }}
+            Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+      - name: Fail if below floor
+        if: steps.check.outputs.below == 'true'
+        run: |
+          echo "Coverage ${{ steps.coverage.outputs.total }}% is below the required 100% floor" >&2
+          exit 1
+
+  android-tests:
+    name: Android unit tests (informational coverage)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.5"
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install gomobile/gobind
+        run: |
+          go install golang.org/x/mobile/cmd/gomobile@latest
+          go install golang.org/x/mobile/cmd/gobind@latest
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      # ubuntu-latest ships a pre-installed Android SDK at $ANDROID_HOME,
+      # but not the NDK gomobile bind needs for cgo cross-compilation.
+      - name: Install Android NDK and run gomobile init
+        run: |
+          "${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager" --install "ndk;26.1.10909125"
+          ANDROID_NDK_HOME="${ANDROID_HOME}/ndk/26.1.10909125" gomobile init
+
+      - name: Build mobile.aar
+        working-directory: go/mobile
+        run: gomobile bind -androidapi 26 -o ../../android/app/libs/mobile.aar -target=android ./...
+
+      - name: Run unit tests
+        working-directory: android
+        run: ./gradlew testDebugUnitTest koverHtmlReportDebug --console=plain
+
+      - name: Upload Kover report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-kover-report
+          path: android/app/build/reports/kover/htmlDebug/
