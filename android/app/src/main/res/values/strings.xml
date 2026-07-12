@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Car Monitor</string>
+
+    <string name="notification_channel_name">OBD2 connection status</string>
+    <string name="notification_channel_description">Shows whether Car Monitor is connected to the OBD2 dongle</string>
+
+    <string name="notification_title">Car Monitor</string>
+    <string name="notification_connecting">Connecting to %1$s…</string>
+    <string name="notification_connected">Connected to %1$s</string>
+    <string name="notification_disconnected">Disconnected — retrying in %1$ds</string>
+    <string name="notification_permission_missing">Bluetooth permission needed</string>
+
+    <string name="status_connecting">Connecting…</string>
+    <string name="status_connected">Connected</string>
+    <string name="status_disconnected">Disconnected — retrying in %1$ds</string>
+    <string name="status_permission_missing">Grant Bluetooth permission to start monitoring</string>
+
+    <string name="reading_row_format">%1$s: %2$s %3$s</string>
+
+    <string name="battery_optimization_button">Exempt from battery optimization</string>
+</resources>

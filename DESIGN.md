@@ -104,9 +104,11 @@ Kotlin is intentionally kept dumb (I/O plumbing + Android ceremony).
 4. Decoded readings are appended to local storage (`internal/storage`) and
    also handed back to Kotlin (via a callback interface) for the status
    screen to display.
-5. `internal/obd2` drives the polling loop itself (which PIDs to request,
-   how often) based on the active `vehicle.Profile`'s PID list — Kotlin
-   never needs to know what a PID is.
+5. `internal/obd2` decides *which* PIDs to request, based on the active
+   `vehicle.Profile`'s PID list — Kotlin never needs to know what a PID is.
+   *How often* to poll is, for v1, a plain constant in
+   `ObdForegroundService` (`Session`/`Commands()` carries no timing info);
+   see section 12 for moving that into Go too.
 
 ## 5. Extensibility
 
@@ -202,15 +204,23 @@ and `jq`, trivial to replace with a real DB later if querying needs grow.
 
 ## 8. Permissions
 
+- `BLUETOOTH` and `BLUETOOTH_ADMIN` (`maxSdkVersion=30`) — the pre-API-31
+  normal permissions any Bluetooth API call requires; superseded by
+  `BLUETOOTH_CONNECT` on API 31+
 - `BLUETOOTH_CONNECT` (Android 12+, API 31+)
 - `BLUETOOTH_SCAN` (only needed if we ever add discovery; not required for
   connecting to a hardcoded, already-paired MAC, but harmless to declare
-  ahead of the device-picker extensibility work)
+  ahead of the device-picker extensibility work) — note the Android shell
+  must not call any SCAN-gated API (e.g. `BluetoothAdapter.cancelDiscovery()`)
+  against a hardcoded MAC without also requesting this at runtime, or every
+  connection attempt fails with `SecurityException` on API 31+
 - `ACCESS_FINE_LOCATION` (still required by some OEMs for classic
   Bluetooth on API < 31)
 - `FOREGROUND_SERVICE` and `FOREGROUND_SERVICE_CONNECTED_DEVICE` (API 34+)
 - `POST_NOTIFICATIONS` (Android 13+, runtime-requested)
 - `RECEIVE_BOOT_COMPLETED` (optional, only if auto-start on boot is enabled)
+- `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` — pairs with the battery-optimization
+  exemption prompt described in section 7
 
 ## 9. Repo layout
 
@@ -232,8 +242,8 @@ car_monitor/
     └── setup_ubuntu.sh       # installs/maintains all local build prereqs
 ```
 
-`go/` and `mobile/` don't exist yet as code — this doc defines the shape;
-implementation is a follow-up.
+`go/` (including `mobile/`) and `android/` are both implemented, matching
+this layout.
 
 ## 10. Local build prerequisites (Ubuntu)
 
@@ -244,7 +254,7 @@ build environment with one command.
 
 | Tool | Why it's needed | Version pinned by script |
 |---|---|---|
-| Go | All app logic; also builds `gomobile`/`gobind` | 1.22.x |
+| Go | All app logic; also builds `gomobile`/`gobind` | 1.26.5 |
 | OpenJDK 17 | Required by the Android Gradle Plugin | 17 (Temurin) |
 | Android `cmdline-tools` + `sdkmanager` | Pulls SDK platform, build-tools, NDK | latest `cmdline-tools` |
 | Android SDK Platform | Compile target | `android-34` |
@@ -270,7 +280,7 @@ Notes:
 ```sh
 # 1. Build the Go core into an Android AAR
 cd go/mobile
-gomobile bind -o ../../android/app/libs/mobile.aar -target=android ./...
+gomobile bind -androidapi 26 -o ../../android/app/libs/mobile.aar -target=android ./...
 
 # 2. Build the Android app
 cd ../../android
@@ -287,6 +297,16 @@ that hook — they need the Android SDK/NDK and are slow — so run them
 manually whenever a change touches `android/` or `mobile`'s exported
 surface.
 
+`-androidapi 26` matches `android/app/build.gradle.kts`'s `minSdk`.
+Without it, `gomobile bind` defaults to API 16, which NDK 26 (the version
+`scripts/setup_ubuntu.sh` installs) no longer supports — the bind step
+fails immediately with "unsupported API version 16 (not in 21..34)".
+
+Measured on a machine with the SDK/NDK/`gomobile` already installed:
+`gomobile bind` takes ~10s; `gradlew assembleDebug` takes ~1.5min on a
+clean checkout (downloading the Gradle distribution + AGP + dependencies)
+and ~10s on a warm rebuild.
+
 ## 12. Open questions / future work
 
 - Where does device/vehicle selection live once it's no longer hardcoded —
@@ -298,3 +318,8 @@ surface.
   file size or query needs grow (SQLite via a pure-Go driver to avoid
   reintroducing cgo/NDK complexity for the app itself, e.g.
   `ncruces/go-sqlite3`).
+- Polling cadence (section 4 step 5) currently lives as constants in
+  `ObdForegroundService` rather than `internal/obd2`, since `Session`
+  exposes no timing info today. Moving it into Go (e.g. an interval per
+  `vehicle.Profile`, or per-`PID`) would let a future vehicle with
+  different sampling needs express that without touching Kotlin.

@@ -1,0 +1,314 @@
+package com.carmonitor.app
+
+import android.Manifest
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.app.Service
+import android.bluetooth.BluetoothAdapter
+import android.bluetooth.BluetoothManager
+import android.bluetooth.BluetoothSocket
+import android.content.Context
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Binder
+import android.os.Build
+import android.os.IBinder
+import android.util.Log
+import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import mobile.Mobile
+import mobile.ReadingListener
+import mobile.Session
+import java.io.File
+import java.io.IOException
+import java.util.UUID
+import java.util.concurrent.CopyOnWriteArrayList
+
+/**
+ * Foreground service owning the Bluetooth link to the hardcoded OBD2 dongle.
+ * See DESIGN.md sections 4 and 7: this is deliberately dumb I/O plumbing —
+ * all protocol framing/decoding lives in the Go [Session]; this class only
+ * moves bytes in and out of the socket and turns connection state into a
+ * notification and callbacks for [StatusActivity].
+ */
+class ObdForegroundService : Service() {
+
+    sealed class ConnectionState {
+        data object Connecting : ConnectionState()
+        data object Connected : ConnectionState()
+        data class Disconnected(val retryInSeconds: Int) : ConnectionState()
+        data object PermissionMissing : ConnectionState()
+    }
+
+    interface StatusListener {
+        fun onStateChanged(state: ConnectionState)
+        fun onReading(name: String, value: Double, unit: String)
+    }
+
+    inner class LocalBinder : Binder() {
+        fun getService(): ObdForegroundService = this@ObdForegroundService
+    }
+
+    private data class ConnectionHandles(val socket: BluetoothSocket, val session: Session)
+
+    private val binder = LocalBinder()
+    private val scope = CoroutineScope(Dispatchers.IO + Job())
+    private val listeners = CopyOnWriteArrayList<StatusListener>()
+
+    private var socket: BluetoothSocket? = null
+    private var session: Session? = null
+    private var connectionJob: Job? = null
+
+    @Volatile
+    private var latestState: ConnectionState = ConnectionState.Disconnected(retryInSeconds = 0)
+
+    override fun onBind(intent: Intent?): IBinder = binder
+
+    override fun onCreate() {
+        super.onCreate()
+        createNotificationChannel()
+        startForeground(NOTIFICATION_ID, buildNotification(latestState))
+    }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // onStartCommand is always called on the main thread, one call at a
+        // time, so checking-and-launching here is inherently race-free —
+        // unlike checking `session == null`, which stays true for the
+        // whole (multi-second) connect() call, so a second start request
+        // arriving mid-connect (e.g. StatusActivity re-requesting
+        // permissions after a screen rotation) would otherwise launch a
+        // second concurrent connectionLoop().
+        if (connectionJob?.isActive != true) {
+            connectionJob = scope.launch { connectionLoop() }
+        }
+        return START_STICKY
+    }
+
+    override fun onDestroy() {
+        scope.cancel()
+        closeConnection()
+        super.onDestroy()
+    }
+
+    fun addStatusListener(listener: StatusListener) {
+        listeners.add(listener)
+        listener.onStateChanged(latestState)
+    }
+
+    fun removeStatusListener(listener: StatusListener) {
+        listeners.remove(listener)
+    }
+
+    /**
+     * Connect, run the read/write loops until the socket fails, then
+     * reconnect with exponential backoff (capped) per DESIGN.md section 7.
+     * Never lets an exception escape and kill the service.
+     */
+    private suspend fun connectionLoop() {
+        var backoffMs = INITIAL_BACKOFF_MS
+
+        while (scope.isActive) {
+            if (!hasBluetoothPermission()) {
+                updateState(ConnectionState.PermissionMissing)
+                delay(PERMISSION_POLL_INTERVAL_MS)
+                continue
+            }
+
+            updateState(ConnectionState.Connecting)
+            var permissionMissing = false
+            try {
+                val handles = openConnection()
+                socket = handles.socket
+                session = handles.session
+                backoffMs = INITIAL_BACKOFF_MS
+                updateState(ConnectionState.Connected)
+                runSessionLoops(handles.socket, handles.session)
+            } catch (e: SecurityException) {
+                Log.w(TAG, "Bluetooth permission missing", e)
+                permissionMissing = true
+            } catch (e: Exception) {
+                // Socket/session failure of any kind (IOException from a
+                // dropped connection, or an error from the Go layer) — fall
+                // through to the backoff-and-retry below rather than
+                // crashing the service.
+                Log.w(TAG, "Connection attempt failed, will retry", e)
+            } finally {
+                closeConnection()
+            }
+
+            if (permissionMissing) {
+                updateState(ConnectionState.PermissionMissing)
+                delay(PERMISSION_POLL_INTERVAL_MS)
+                continue
+            }
+
+            val retrySeconds = (backoffMs / 1000).toInt()
+            updateState(ConnectionState.Disconnected(retrySeconds))
+            delay(backoffMs)
+            backoffMs = (backoffMs * 2).coerceAtMost(MAX_BACKOFF_MS)
+        }
+    }
+
+    private fun hasBluetoothPermission(): Boolean {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            return ContextCompat.checkSelfPermission(
+                this, Manifest.permission.BLUETOOTH_CONNECT
+            ) == PackageManager.PERMISSION_GRANTED
+        }
+        return true
+    }
+
+    private fun openConnection(): ConnectionHandles {
+        val bluetoothManager = getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
+        val adapter: BluetoothAdapter = bluetoothManager.adapter
+            ?: throw IOException("No Bluetooth adapter on this device")
+        if (!adapter.isEnabled) {
+            throw IOException("Bluetooth is disabled")
+        }
+
+        // No adapter.cancelDiscovery() here: this app never calls
+        // startDiscovery() (DESIGN.md's non-goals rule out a device
+        // picker/scan UI for v1), and cancelDiscovery() requires the
+        // BLUETOOTH_SCAN runtime permission on API 31+ that nothing else in
+        // the app requests — calling it would turn "not scanning" into a
+        // hard SecurityException that blocks every connection attempt.
+        val device = adapter.getRemoteDevice(Mobile.deviceMAC())
+        val newSocket = device.createRfcommSocketToServiceRecord(SPP_UUID)
+        try {
+            newSocket.connect() // blocks until connected or throws IOException
+        } catch (e: Exception) {
+            newSocket.close() // connect() failed: don't leak the socket/fd
+            throw e
+        }
+
+        val storagePath = File(filesDir, "readings.jsonl").absolutePath
+        val newSession = try {
+            Mobile.newSession(storagePath, sessionListener)
+        } catch (e: Exception) {
+            newSocket.close()
+            throw e
+        }
+
+        return ConnectionHandles(newSocket, newSession)
+    }
+
+    private val sessionListener = ReadingListener { _, name, unit, value, _ ->
+        listeners.forEach { it.onReading(name, value, unit) }
+    }
+
+    /** Suspends until the reader or writer loop throws (i.e. the socket died). */
+    private suspend fun runSessionLoops(socket: BluetoothSocket, session: Session) = coroutineScope {
+        launch { readLoop(socket, session) }
+        launch { writeLoop(socket, session) }
+    }
+
+    private suspend fun readLoop(socket: BluetoothSocket, session: Session) {
+        val input = socket.inputStream
+        val buffer = ByteArray(1024)
+        while (currentCoroutineContext().isActive) {
+            val read = input.read(buffer) // blocking read, safe on Dispatchers.IO
+            if (read < 0) throw IOException("Bluetooth input stream closed")
+            session.feed(buffer.copyOf(read))
+        }
+    }
+
+    private suspend fun writeLoop(socket: BluetoothSocket, session: Session) {
+        val output = socket.outputStream
+        while (currentCoroutineContext().isActive) {
+            val commandCount = session.commandCount()
+            for (i in 0L until commandCount) {
+                val command = session.commandAt(i)
+                if (command.isEmpty()) continue
+                output.write((command + "\r").toByteArray(Charsets.US_ASCII))
+                output.flush()
+                delay(COMMAND_INTERVAL_MS)
+            }
+            delay(POLL_CYCLE_MS)
+        }
+    }
+
+    private fun closeConnection() {
+        try {
+            session?.close()
+        } catch (e: Exception) {
+            // Best-effort close; the connection is going away regardless.
+        }
+        session = null
+
+        try {
+            socket?.close()
+        } catch (e: IOException) {
+            // Best-effort close.
+        }
+        socket = null
+    }
+
+    private fun updateState(state: ConnectionState) {
+        latestState = state
+        listeners.forEach { it.onStateChanged(state) }
+        val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        manager.notify(NOTIFICATION_ID, buildNotification(state))
+    }
+
+    private fun createNotificationChannel() {
+        val channel = NotificationChannel(
+            CHANNEL_ID,
+            getString(R.string.notification_channel_name),
+            NotificationManager.IMPORTANCE_LOW
+        ).apply {
+            description = getString(R.string.notification_channel_description)
+        }
+        val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        manager.createNotificationChannel(channel)
+    }
+
+    private fun buildNotification(state: ConnectionState): Notification {
+        val contentIntent = PendingIntent.getActivity(
+            this,
+            0,
+            Intent(this, StatusActivity::class.java),
+            PendingIntent.FLAG_IMMUTABLE
+        )
+        val text = when (state) {
+            is ConnectionState.Connecting -> getString(R.string.notification_connecting, Mobile.deviceMAC())
+            is ConnectionState.Connected -> getString(R.string.notification_connected, Mobile.deviceMAC())
+            is ConnectionState.Disconnected -> getString(R.string.notification_disconnected, state.retryInSeconds)
+            is ConnectionState.PermissionMissing -> getString(R.string.notification_permission_missing)
+        }
+        return NotificationCompat.Builder(this, CHANNEL_ID)
+            .setContentTitle(getString(R.string.notification_title))
+            .setContentText(text)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setContentIntent(contentIntent)
+            .setOngoing(true)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .build()
+    }
+
+    companion object {
+        private const val TAG = "ObdForegroundService"
+        private const val CHANNEL_ID = "obd2_status"
+        private const val NOTIFICATION_ID = 1
+        private val SPP_UUID: UUID = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
+        private const val INITIAL_BACKOFF_MS = 1_000L
+        private const val MAX_BACKOFF_MS = 30_000L
+        private const val COMMAND_INTERVAL_MS = 100L
+        private const val POLL_CYCLE_MS = 250L
+        private const val PERMISSION_POLL_INTERVAL_MS = 3_000L
+
+        fun start(context: Context) {
+            ContextCompat.startForegroundService(context, Intent(context, ObdForegroundService::class.java))
+        }
+    }
+}
