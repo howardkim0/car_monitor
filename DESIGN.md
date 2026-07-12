@@ -200,9 +200,17 @@ and `jq`, trivial to replace with a real DB later if querying needs grow.
   (e.g. 30s max), rather than a tight retry loop draining the battery.
 - If no connection is ever reached (or re-reached) within 5 minutes —
   counting time spent waiting on a missing Bluetooth permission too — the
-  service stops itself via the same teardown path as the user-initiated
-  stop below, rather than retrying indefinitely against a dongle that's
-  never going to answer (car parked out of range, dongle unplugged, etc).
+  service stops itself, rather than retrying indefinitely against a
+  dongle that's never going to answer (car parked out of range, dongle
+  unplugged, etc). It cannot simply call `stopForeground`+`stopSelf` the
+  way the user-initiated stop below does: a Service stays alive as long
+  as it's started *or* bound, and unlike a button tap inside
+  `StatusActivity`, this decision originates inside the service's own
+  coroutine with no way to make an already-bound Activity unbind. It
+  routes through a dedicated `ConnectionState.TimedOut` first so
+  `StatusActivity` gets a chance to unbind itself before the service
+  actually tears down — skipping that step would silently strand a bound
+  client on stale "retrying" text after the notification disappears.
 - User will need to exempt the app from battery optimization
   (`ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS`) for reliable long-run
   background behavior — call this out in-app and in the README.

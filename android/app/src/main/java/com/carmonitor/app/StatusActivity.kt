@@ -123,13 +123,22 @@ class StatusActivity : AppCompatActivity(), ObdForegroundService.StatusListener 
 
     override fun onStateChanged(state: ObdForegroundService.ConnectionState) {
         runOnUiThread {
-            statusText.text = when (state) {
-                is ObdForegroundService.ConnectionState.Connecting -> getString(R.string.status_connecting)
-                is ObdForegroundService.ConnectionState.Connected -> getString(R.string.status_connected)
+            when (state) {
+                is ObdForegroundService.ConnectionState.Connecting ->
+                    statusText.text = getString(R.string.status_connecting)
+                is ObdForegroundService.ConnectionState.Connected ->
+                    statusText.text = getString(R.string.status_connected)
                 is ObdForegroundService.ConnectionState.Disconnected ->
-                    getString(R.string.status_disconnected, state.retryInSeconds)
+                    statusText.text = getString(R.string.status_disconnected, state.retryInSeconds)
                 is ObdForegroundService.ConnectionState.PermissionMissing ->
-                    getString(R.string.status_permission_missing)
+                    statusText.text = getString(R.string.status_permission_missing)
+                is ObdForegroundService.ConnectionState.TimedOut ->
+                    // The service decided to stop itself (see
+                    // stopSelfDueToNoConnection()) — apply the same
+                    // stopped-UI teardown stopMonitoring() uses, including
+                    // unbinding, since a Service stays alive while bound
+                    // and only the client (this Activity) can release that.
+                    applyStoppedUi(getString(R.string.status_timed_out))
             }
         }
     }
@@ -145,20 +154,26 @@ class StatusActivity : AppCompatActivity(), ObdForegroundService.StatusListener 
     }
 
     private fun stopMonitoring() {
+        applyStoppedUi(getString(R.string.status_stopped))
+        ObdForegroundService.stop(this)
+    }
+
+    /**
+     * Shared by a user-tapped Stop and the service's own no-connection
+     * timeout: unbind (if bound) and reflect the stopped state. A Service
+     * stays alive as long as it's started OR bound, so stopSelf() alone
+     * does nothing while this Activity still holds a live bind — this is
+     * the only thing that can actually release it.
+     */
+    private fun applyStoppedUi(message: String) {
         boundService?.removeStatusListener(this)
         boundService = null
         if (isBound) {
-            // A Service stays alive as long as it's started OR bound —
-            // stopSelf() alone does nothing while this Activity still
-            // holds a live bind (e.g. tapping Stop without backgrounding
-            // first), so the socket/session would otherwise keep running
-            // silently behind a UI that already says "Stopped."
             unbindService(serviceConnection)
             isBound = false
         }
         stoppedByUser = true
-        ObdForegroundService.stop(this)
-        statusText.text = getString(R.string.status_stopped)
+        statusText.text = message
         stopButton.visibility = android.view.View.GONE
     }
 

@@ -11,12 +11,14 @@
     <string name="notification_disconnected">Disconnected — retrying in %1$ds</string>
     <string name="notification_permission_missing">Bluetooth permission needed</string>
     <string name="notification_stop_action">Stop</string>
+    <string name="notification_timed_out">No Bluetooth connection for 5 minutes — stopped</string>
 
     <string name="status_connecting">Connecting…</string>
     <string name="status_connected">Connected</string>
     <string name="status_disconnected">Disconnected — retrying in %1$ds</string>
     <string name="status_permission_missing">Grant Bluetooth permission to start monitoring</string>
     <string name="status_stopped">Stopped. Reopen the app to start monitoring again.</string>
+    <string name="status_timed_out">No Bluetooth connection for 5 minutes, so monitoring stopped. Reopen the app to try again.</string>
 
     <string name="reading_row_format">%1$s: %2$s %3$s</string>
 

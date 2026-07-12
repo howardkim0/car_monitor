@@ -51,6 +51,7 @@ class ObdForegroundService : Service() {
         data object Connected : ConnectionState()
         data class Disconnected(val retryInSeconds: Int) : ConnectionState()
         data object PermissionMissing : ConnectionState()
+        data object TimedOut : ConnectionState()
     }
 
     interface StatusListener {
@@ -191,9 +192,23 @@ class ObdForegroundService : Service() {
         }
     }
 
-    /** Same teardown the ACTION_STOP path uses — see onStartCommand(). */
+    /**
+     * Same teardown the ACTION_STOP path uses — see onStartCommand() —
+     * plus one thing that path doesn't need: this call originates from
+     * inside the service's own coroutine, not from StatusActivity, so
+     * there's no client-side unbind happening first. A Service stays
+     * alive as long as it's started OR bound, so stopSelf() alone would
+     * silently do nothing while the Activity is open and bound —
+     * stopForeground() would still remove the notification, but
+     * connectionLoop() has already returned, so the in-app status text
+     * would freeze on stale "retrying" text forever. Routing through
+     * updateState(TimedOut) first gives StatusActivity a chance to react
+     * by unbinding itself (see its onStateChanged()), which is the only
+     * thing that can actually let the service finish dying.
+     */
     private fun stopSelfDueToNoConnection() {
         Log.w(TAG, "No Bluetooth connection in ${NO_CONNECTION_TIMEOUT_MS / 1000}s, stopping")
+        updateState(ConnectionState.TimedOut)
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
@@ -329,6 +344,7 @@ class ObdForegroundService : Service() {
             is ConnectionState.Connected -> getString(R.string.notification_connected, Mobile.deviceMAC())
             is ConnectionState.Disconnected -> getString(R.string.notification_disconnected, state.retryInSeconds)
             is ConnectionState.PermissionMissing -> getString(R.string.notification_permission_missing)
+            is ConnectionState.TimedOut -> getString(R.string.notification_timed_out)
         }
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle(getString(R.string.notification_title))
