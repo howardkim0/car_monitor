@@ -1,4 +1,6 @@
-# Android/Gradle build output
+# Android/Gradle build output. Exception: android/car-monitor-debug.apk is
+# intentionally tracked (see DESIGN.md section 11, "Pre-built APK") — don't
+# add a blanket *.apk rule here without carving that path back out.
 android/build/
 android/app/build/
 android/.gradle/

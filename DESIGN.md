@@ -307,6 +307,34 @@ Measured on a machine with the SDK/NDK/`gomobile` already installed:
 clean checkout (downloading the Gradle distribution + AGP + dependencies)
 and ~10s on a warm rebuild.
 
+### Pre-built APK
+
+`android/car-monitor-debug.apk` is a debug-signed build committed directly
+to `main`, kept up to date whenever `android/` or `mobile`'s exported
+surface changes, so installing on a phone is just:
+
+```sh
+adb install -r android/car-monitor-debug.apk
+```
+
+This is a deliberate exception to normal practice — build outputs are
+otherwise gitignored (`android/build/`, `android/app/build/`,
+`android/app/libs/*.aar`) since they're regenerable from source. This one
+file is tracked so anyone can sideload the app without a full SDK/NDK/Go
+toolchain setup. Tradeoffs worth knowing:
+
+- It's **debug-signed**, not release-signed — there's no release keystore
+  in this repo (generating and storing a signing key is a separate,
+  more sensitive decision than "commit the build output"). Fine for
+  sideloading on your own device; not suitable for wider distribution
+  without setting up real release signing first.
+- Committing a ~14MB binary that gets replaced on every relevant change
+  means `git log`/`git blame` on this path aren't meaningful, and the
+  repo's `.git` history grows by roughly the APK's size on every update
+  (git can't diff binaries). If that growth becomes a problem, moving to
+  GitHub Releases (tagged, attached as a release asset, not in history)
+  is the natural next step.
+
 ## 12. Open questions / future work
 
 - Where does device/vehicle selection live once it's no longer hardcoded —
