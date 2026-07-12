@@ -98,7 +98,11 @@ jobs:
 
       - name: Run unit tests
         working-directory: android
-        run: ./gradlew testDebugUnitTest koverHtmlReportDebug --console=plain
+        run: ./gradlew testDebugUnitTest koverHtmlReportDebug koverXmlReportDebug --console=plain
+
+      - name: Print coverage percentage
+        if: always()
+        run: python3 scripts/print_kover_coverage.py android/app/build/reports/kover/reportDebug.xml
 
       - name: Upload Kover report
         if: always()
