@@ -84,8 +84,11 @@ Kotlin is intentionally kept dumb (I/O plumbing + Android ceremony).
 │                            │  │ internal/vehicle (registry │  │                  │
 │                            │  │   of known cars / PID maps)│  │                  │
 │                            │  ├───────────────────────────┤  │                  │
-│                            │  │ internal/storage (JSONL    │  │                  │
-│                            │  │   append-only log on disk) │  │                  │
+│                            │  │ internal/storage (CSV,     │  │                  │
+│                            │  │   UTC day-rotated readings)│  │                  │
+│                            │  ├───────────────────────────┤  │                  │
+│                            │  │ internal/applog (size-     │  │                  │
+│                            │  │   capped app/error log)    │  │                  │
 │                            │  └───────────────────────────┘  │                  │
 │                            └────────────────────────────────┘                   │
 └──────────────────────────────────────────────────────────────────────────────────┘
@@ -101,14 +104,17 @@ Kotlin is intentionally kept dumb (I/O plumbing + Android ceremony).
    outstanding PID requests, and decodes them into typed readings
    (`Reading{PID, Name, Value, Unit, Timestamp}`) using the active
    `vehicle.Profile`.
-4. Decoded readings are appended to local storage (`internal/storage`) and
-   also handed back to Kotlin (via a callback interface) for the status
-   screen to display.
+4. Decoded readings are appended to local storage (`internal/storage`, CSV,
+   see section 6) and also handed back to Kotlin (via a callback interface)
+   for the status screen to display. A failed append is not silently
+   dropped — it goes to `internal/applog` (section 6) instead. A decode
+   failure (a malformed or truncated response line) is not logged; it's
+   treated as expected noise on a real ELM327 link and simply skipped.
 5. `internal/obd2` decides *which* PIDs to request, based on the active
-   `vehicle.Profile`'s PID list — Kotlin never needs to know what a PID is.
-   *How often* to poll is, for v1, a plain constant in
-   `ObdForegroundService` (`Session`/`Commands()` carries no timing info);
-   see section 12 for moving that into Go too.
+   `vehicle.Profile`'s PID list and a discovery step (section 5.2) — Kotlin
+   never needs to know what a PID is. *How often* to poll is, for v1, a
+   plain constant in `ObdForegroundService` (`Session`/`Commands()` carries
+   no timing info); see section 12 for moving that into Go too.
 
 ## 5. Extensibility
 
@@ -140,38 +146,83 @@ never on a literal MAC string.
 ```go
 // internal/vehicle/vehicle.go
 type PID struct {
-    Code    byte
-    Name    string
-    Mode    byte
-    Decode  func(bytes []byte) float64
-    Unit    string
+    Code   byte
+    Mode   Mode
+    Name   string
+    Unit   string
+    Decode func(data []byte) (float64, error)
 }
 
 type Profile struct {
     Make, Model string
     Year        int
-    PIDs        []PID // subset of standard + any manufacturer-specific PIDs
+    PIDs        []PID
 }
 
 var subaruForester2023 = Profile{
     Make: "Subaru", Model: "Forester", Year: 2023,
     PIDs: []PID{
-        {Code: 0x0C, Name: "RPM", Mode: 0x01, Unit: "rpm", Decode: decodeRPM},
-        {Code: 0x0D, Name: "Speed", Mode: 0x01, Unit: "km/h", Decode: decodeSpeed},
-        {Code: 0x05, Name: "CoolantTemp", Mode: 0x01, Unit: "C", Decode: decodeTempC},
-        // ... standard Mode 01 PIDs to start; Subaru-specific PIDs can be
-        // added here once reverse-engineered / sourced.
+        {Code: 0x04, Mode: ModeCurrentData, Name: "Calculated Engine Load", Unit: "%", Decode: decodePercentOfByte},
+        {Code: 0x05, Mode: ModeCurrentData, Name: "Coolant Temperature", Unit: "C", Decode: decodeByteMinus40},
+        // ... 30 more standard SAE J1979 Mode 01 PIDs — see vehicle.go for
+        // the full, current list; not duplicated here since it would just
+        // drift out of sync with the code.
     },
 }
 
 func Default() Profile { return subaruForester2023 }
 ```
 
-Same pattern as devices: one hardcoded `Default()` today, but the rest of
-the app only talks to `vehicle.Profile`. A second car means adding another
-`Profile` value and a selection mechanism — no changes to `obd2` or
-Kotlin. Longer-term this could move to a JSON/YAML file bundled as an
-Android asset instead of a Go literal, so profiles can be edited without a
+**Targets the NA FB25 2.5L Forester specifically, not the turbo FA24.**
+That distinction doesn't change *which* PIDs apply — SAE J1979 has no
+dedicated "boost" PID; boost is inferred from Intake Manifold Absolute
+Pressure (0x0B) exceeding Barometric Pressure (0x33), both included and
+valid for either engine — only how Intake Manifold Pressure *behaves* (on
+this NA engine it never exceeds ambient).
+
+**PID scope is a curated practical subset (32 PIDs today), not the full
+SAE J1979 Mode 01 table (80+ PIDs across spec revisions).** The
+discovery mechanism below means a PID listed here that this particular
+ECU doesn't support is simply never requested — there's no runtime cost
+to the list being broader than any one car needs, only the
+implementation/test cost of adding an entry, which is what actually
+bounds the list's size. Excluded and why: bit-encoded/enum PIDs (mode
+status bytes, OBD standards, fuel type) don't fit the single-`float64`
+`Decode` model and aren't "data" the way a temperature/pressure/speed
+reading is; wideband/lambda O2 variants are redundant with the simpler
+voltage-only O2 PIDs included; ethanol % is irrelevant to a
+non-flex-fuel Forester. PIDs 0x14/0x15/0x16/0x17 (O2 sensor banks 1 and
+2 — the boxer engine's genuine two banks, one per cylinder pair) each
+return *two* values (sensor voltage, then short-term trim), but `Decode`
+only supports one `float64` — only the voltage is decoded, since the
+trim sub-field is redundant with the bank-level trim already captured
+via PIDs 0x06-0x09.
+
+**PID discovery, not static over-requesting.** `internal/obd2.Session`
+doesn't request every PID in the profile from cycle one — with 32
+PIDs (vs. the original 4), that would balloon a poll cycle to seconds
+for PIDs that may not even be supported. Instead, `Commands()` initially
+returns SAE "PIDs supported" bitmask queries (Mode 01 PIDs
+`0x00`/`0x20`/`0x40`, derived from the profile's actual max PID code, not
+hardcoded) and only switches to the real per-PID request list once the
+ECU's bitmask responses resolve which profile PIDs it actually supports
+— or after a 5-second timeout, which falls back to requesting
+everything (matching the old always-request-everything behavior as a
+safe default, rather than silently going dark, if discovery itself fails
+for some reason). Kotlin's `writeLoop()` needs no changes for this — it
+already just polls `Commands()` blindly every cycle; Go owns the entire
+phase transition. Discovery only covers Mode 01 ("show current data") —
+`discoveryCommands` hardcodes `vehicle.ModeCurrentData` — since that's
+the only mode this app requests (section 12); a future mode (e.g. Mode 09
+vehicle info) would need its own discovery/support-bitmask handling, not
+an extension of this one.
+
+Same extensibility pattern as devices otherwise: one hardcoded
+`Default()` today, but the rest of the app only talks to
+`vehicle.Profile`. A second car means adding another `Profile` value and
+a selection mechanism — no changes to `obd2` or Kotlin. Longer-term this
+could move to a JSON/YAML file bundled as an Android asset instead of a Go
+literal, so profiles can be edited without a
 rebuild; not needed for v1.
 
 ### 5.3 Selecting device/vehicle without a rebuild
@@ -183,10 +234,78 @@ localized change.
 
 ## 6. Storage
 
-v1 uses an append-only JSON-lines file on local app storage
-(`/data/data/<pkg>/files/readings.jsonl`), one `Reading` per line. No SQLite,
-no cgo dependency, nothing to migrate — trivial to inspect with `adb pull`
-and `jq`, trivial to replace with a real DB later if querying needs grow.
+### 6.1 Reading log
+
+`internal/storage.FileStore` appends one CSV row per `Reading`
+(`pid,name,value,unit,timestamp` — a header row once per file) to
+`/data/data/<pkg>/files/readings/readings-YYYY-MM-DD.csv`, one file per
+**UTC** calendar day — both the filename's date and every `timestamp`
+value are UTC, deliberately with no local-timezone reference anywhere,
+so a file's contents are unambiguous regardless of where the phone
+travels. This is specifically so a future "give me Tuesday's drive"
+analysis is just picking a file, not filtering timestamps out of a
+single ever-growing log.
+
+Rotation is checked on every `Append` call, keyed off the *reading's own*
+timestamp rather than wall-clock-at-write-time: if it falls on a
+different UTC day than the currently-open file, the old file is closed
+(best-effort — a failed close doesn't block opening the new file) and
+the new day's file is opened, writing the header only if it's empty
+after opening — a post-open size check rather than a pre-open existence
+check, so a file left at 0 bytes by a previously failed header write
+gets the header retried on the next resume instead of being treated as
+already-headered forever. This one code path handles both cases the day
+boundary can be crossed: reopening the app hours or days later (resumes
+today's file if one already exists for today, rather than duplicating
+the header or losing yesterday's data), and a drive that spans UTC
+midnight mid-session (rotates the moment a reading dated after midnight
+is appended, not just at the next app restart).
+
+No SQLite, no cgo dependency, nothing to migrate — trivial to inspect
+with `adb pull` and any spreadsheet tool or `csv`-aware shell tool,
+trivial to replace with a real DB later if querying needs grow.
+
+### 6.2 App/error log
+
+Separate from the reading log deliberately: `internal/applog` is a
+small, best-effort, plain-text log (not CSV — this is heterogeneous,
+unstructured data, unlike the reading log's tabular data) for errors and
+debug messages, at `/data/data/<pkg>/files/app.log`. It doesn't need the
+reading log's day-based rotation (there's no "which day's errors" query
+this needs to support) — instead it's a single file capped at
+`applog.MaxSizeBytes` (10MB), and on exceeding that, the current file is
+renamed aside to `app.log.1` (any existing `.1` is discarded first — one
+kept prior file, not unbounded growth) and a fresh file started. If the
+rename itself fails (e.g. transient I/O error), the current file was
+never actually renamed away, so it's simply reopened at the same path —
+logging keeps working (just without having rotated that time) rather
+than going dark for the rest of the process over a rotation failure.
+
+Reachable from both sides of the Go/Kotlin split, per this doc's
+"Go owns business logic" split (section 3): `mobile.LogError`/
+`mobile.LogDebug` are package-level (not tied to any one `Session` —
+a `Session` is recreated on every Bluetooth reconnect, but the app log
+must stay open across that churn) gomobile exports Kotlin calls into
+`ObdForegroundService`'s existing `Log.w` sites, and Go's own error
+paths write to the same log — notably `mobile.go`'s reading-append
+path, which used to silently swallow a failed `store.Append` (`_ =
+s.store.Append(r)`); it now routes that error through `LogError`
+instead.
+
+Every write here is best-effort by design: a logging failure must never
+crash or block the app it's attached to, so both the Go side
+(`internal/applog`) and the Kotlin call sites (`Mobile.initAppLog`/
+`Mobile.closeAppLog`, wrapped in `catch (e: Throwable)` — not just
+`Exception` — in `ObdForegroundService.onCreate()`/`onDestroy()`) treat
+any failure here as something to log-and-continue past, never to
+propagate. That `Throwable` (rather than `Exception`) catch is load-
+bearing, not defensive-programming theater: gomobile's generated
+`Mobile` class does native-library loading in its static initializer,
+and a failure there surfaces as `UnsatisfiedLinkError`/
+`ExceptionInInitializerError` — `Error` subtypes a plain
+`catch (e: Exception)` does not catch, which would otherwise crash the
+whole foreground service over what is, at worst, a logging feature not
+working.
 
 ## 7. Background execution model
 
@@ -278,7 +397,8 @@ car_monitor/
 │   │   ├── obd2/             # ELM327 framing, PID request/response loop
 │   │   ├── device/           # known Bluetooth device profiles
 │   │   ├── vehicle/          # known vehicle profiles + PID maps
-│   │   └── storage/          # JSONL append-only reading log
+│   │   ├── storage/          # CSV, UTC day-rotated reading log
+│   │   └── applog/           # size-capped app/error log
 │   └── mobile/               # gomobile bind entry point (exported API)
 ├── android/                  # Android Studio / Gradle project
 │   └── app/
@@ -387,15 +507,32 @@ toolchain setup. Tradeoffs worth knowing:
   designed so this is additive.)
 - DTC (fault code) reading/clearing is out of scope for v1 but fits the
   same PID-request pattern in `internal/obd2`.
-- Long-term storage growth: JSONL is fine for early use; revisit if
-  file size or query needs grow (SQLite via a pure-Go driver to avoid
-  reintroducing cgo/NDK complexity for the app itself, e.g.
-  `ncruces/go-sqlite3`).
-- Polling cadence (section 4 step 5) currently lives as constants in
-  `ObdForegroundService` rather than `internal/obd2`, since `Session`
-  exposes no timing info today. Moving it into Go (e.g. an interval per
-  `vehicle.Profile`, or per-`PID`) would let a future vehicle with
-  different sampling needs express that without touching Kotlin.
+- Long-term storage growth: day-rotated CSV (section 6.1) is fine for
+  early use; revisit if per-file size or cross-day query needs grow
+  (SQLite via a pure-Go driver to avoid reintroducing cgo/NDK complexity
+  for the app itself, e.g. `ncruces/go-sqlite3`).
+- Polling cadence (section 4 step 5) still lives as constants
+  (`COMMAND_INTERVAL_MS`/`POLL_CYCLE_MS`) in `ObdForegroundService`
+  rather than `internal/obd2` — *which* PIDs to request is now decided
+  in Go (section 5.2's discovery mechanism), but *how often* isn't yet,
+  since `Session` still exposes no timing info. Moving that into Go too
+  (e.g. an interval per `vehicle.Profile`, or per-`PID`) would let a
+  future vehicle with different sampling needs express that without
+  touching Kotlin.
+- `COMMAND_INTERVAL_MS` was reduced from 100ms to 50ms alongside the PID
+  expansion (32 PIDs now vs. the original 4, so a full cycle at the old
+  interval would run several seconds) — unverified against real ELM327
+  hardware, since this dev environment has no Bluetooth device access;
+  revisit if real-world testing shows it's too aggressive.
+- `mobile.Session.CommandCount()`/`CommandAt(i)` are two separate JNI
+  calls, not one atomic snapshot. Now that `Commands()` can change
+  mid-flight (discovery resolving between the two calls), Kotlin's
+  `writeLoop()` could in principle see a `CommandAt` index that's gone
+  stale between the count and the fetch. Accepted as a known, low-severity
+  gap rather than fixed: the JNI boundary makes a single "return the whole
+  list" call the real fix, which isn't worth doing for a mismatch that
+  self-heals on the very next poll cycle (at most, one cycle skips or
+  double-requests a PID).
 
 ## 13. Testing
 
