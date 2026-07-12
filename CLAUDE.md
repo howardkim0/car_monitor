@@ -9,6 +9,31 @@ vehicle profiles (`internal/vehicle`), and the reasoning behind them. If a
 change needs to diverge from what's there, update `DESIGN.md` in the same
 change rather than letting the doc and the code drift apart.
 
+## Planning docs are saved to docs/
+
+When a non-trivial task goes through plan mode, save the resulting plan
+into `docs/` (named `plan-<topic>.md`) once it's approved — not just left
+in the ephemeral plan-mode location. Include research gathered while
+planning (web lookups, spec cross-references, decisions made and why),
+not only the final task breakdown — that reasoning is what's actually
+hard to reconstruct later, and code/DESIGN.md diffs alone don't carry it.
+If the task originated from a spec doc already in `docs/` (e.g.
+`docs/prompt-<topic>.md`), the plan is its companion, not a replacement —
+both stay.
+
+## Delegate implementation to Haiku agents for token efficiency
+
+Where a change is well-specified (the file(s), the exact diff, and the
+intent are already clear — e.g. from a plan, a reviewed spec, or explicit
+instructions), delegate the actual implementation to a Haiku-model
+subagent rather than writing it inline. Reserve Sonnet/Opus-level
+reasoning for planning, architecture decisions, three-persona review, and
+ambiguous judgment calls; hand mechanical implementation to Haiku once
+the "what" and "how" are already decided. Batch independent Haiku tasks
+in parallel rather than running them serially. This keeps token spend
+proportional to the actual difficulty of the decision being made, not the
+size of the diff.
+
 ## DESIGN.md changes need an Architect pass first
 
 Any edit to `DESIGN.md` — however small — gets an explicit
