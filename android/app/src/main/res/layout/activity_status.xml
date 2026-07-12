@@ -33,13 +33,29 @@
             android:layout_height="wrap_content"
             android:text="@string/battery_optimization_button" />
 
+    </LinearLayout>
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:orientation="horizontal"
+        android:gravity="end">
+
         <Button
             android:id="@+id/stopButton"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginStart="8dp"
             android:backgroundTint="#B3261E"
             android:text="@string/stop_button" />
+
+        <Button
+            android:id="@+id/quitButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="8dp"
+            android:backgroundTint="#3A3A3A"
+            android:text="@string/quit_app_button" />
 
     </LinearLayout>
 

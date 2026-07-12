@@ -15,11 +15,14 @@ import android.content.pm.PackageManager
 import android.os.Binder
 import android.os.Build
 import android.os.IBinder
+import android.os.Process
 import android.os.SystemClock
 import android.util.Log
+import androidx.annotation.VisibleForTesting
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -52,6 +55,7 @@ class ObdForegroundService : Service() {
         data class Disconnected(val retryInSeconds: Int) : ConnectionState()
         data object PermissionMissing : ConnectionState()
         data object TimedOut : ConnectionState()
+        data object Stopped : ConnectionState()
     }
 
     interface StatusListener {
@@ -69,9 +73,18 @@ class ObdForegroundService : Service() {
     private val scope = CoroutineScope(Dispatchers.IO + Job())
     private val listeners = CopyOnWriteArrayList<StatusListener>()
 
+    // @Volatile: read/written from both this service's own IO-dispatcher
+    // coroutine (connectionLoop() and friends) and the main thread
+    // (onStartCommand()'s ACTION_STOP/ACTION_QUIT path, which now tears
+    // down the connection synchronously instead of only ever doing it via
+    // onDestroy() — see stopServiceImmediately()).
+    @Volatile
     private var socket: BluetoothSocket? = null
+    @Volatile
     private var session: Session? = null
-    private var connectionJob: Job? = null
+    @Volatile
+    @VisibleForTesting
+    internal var connectionJob: Job? = null
 
     @Volatile
     private var latestState: ConnectionState = ConnectionState.Disconnected(retryInSeconds = 0)
@@ -85,13 +98,20 @@ class ObdForegroundService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == ACTION_STOP) {
-            // START_NOT_STICKY: this is a user-requested stop, not the
-            // system killing the service under memory pressure, so it
-            // must not come back on its own the way START_STICKY would.
-            ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
-            stopSelf()
-            return START_NOT_STICKY
+        when (intent?.action) {
+            ACTION_STOP -> {
+                stopServiceImmediately(ConnectionState.Stopped)
+                return START_NOT_STICKY
+            }
+            ACTION_QUIT -> {
+                stopServiceImmediately(ConnectionState.Stopped)
+                // Same process as the Activity (no multi-process manifest
+                // config) — this is the standard way an Android app
+                // provides a true "Quit" that takes the whole app down,
+                // not just this service.
+                Process.killProcess(Process.myPid())
+                return START_NOT_STICKY
+            }
         }
 
         // onStartCommand is always called on the main thread, one call at a
@@ -125,10 +145,18 @@ class ObdForegroundService : Service() {
     /**
      * Connect, run the read/write loops until the socket fails, then
      * reconnect with exponential backoff (capped) per DESIGN.md section 7.
-     * Never lets an exception escape and kill the service — except that if
-     * NO_CONNECTION_TIMEOUT_MS elapses without ever reaching Connected
+     * Never lets a real failure escape and kill the service — except that
+     * if NO_CONNECTION_TIMEOUT_MS elapses without ever reaching Connected
      * (permission wait time counts too), the service stops itself rather
      * than retrying forever against a dongle that's never going to answer.
+     *
+     * `catch (e: CancellationException) { throw e }` below matters more
+     * than it looks: CancellationException is a plain Exception subtype in
+     * Kotlin, so a bare `catch (e: Exception)` silently swallows a
+     * requested stop and treats it as just another failed attempt to
+     * retry — which is exactly the "tap Stop, it retries anyway" bug this
+     * change fixes. Cancellation must always propagate, never be treated
+     * as a retryable failure.
      */
     private suspend fun connectionLoop() {
         var backoffMs = INITIAL_BACKOFF_MS
@@ -151,12 +179,30 @@ class ObdForegroundService : Service() {
             var permissionMissing = false
             try {
                 val handles = openConnection()
+
+                if (!scope.isActive) {
+                    // Stop/Quit was requested while connect() — a raw
+                    // blocking call coroutine cancellation cannot
+                    // interrupt — was already in flight. Don't report
+                    // Connected after the user already asked to stop;
+                    // close what we just opened and get out.
+                    try {
+                        handles.session.close()
+                    } catch (e: Exception) {
+                        // Best-effort; the service is stopping regardless.
+                    }
+                    handles.socket.close()
+                    return
+                }
+
                 socket = handles.socket
                 session = handles.session
                 backoffMs = INITIAL_BACKOFF_MS
                 lastConnectedAt = SystemClock.elapsedRealtime()
                 updateState(ConnectionState.Connected)
                 runSessionLoops(handles.socket, handles.session)
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: SecurityException) {
                 Log.w(TAG, "Bluetooth permission missing", e)
                 permissionMissing = true
@@ -192,23 +238,35 @@ class ObdForegroundService : Service() {
         }
     }
 
-    /**
-     * Same teardown the ACTION_STOP path uses — see onStartCommand() —
-     * plus one thing that path doesn't need: this call originates from
-     * inside the service's own coroutine, not from StatusActivity, so
-     * there's no client-side unbind happening first. A Service stays
-     * alive as long as it's started OR bound, so stopSelf() alone would
-     * silently do nothing while the Activity is open and bound —
-     * stopForeground() would still remove the notification, but
-     * connectionLoop() has already returned, so the in-app status text
-     * would freeze on stale "retrying" text forever. Routing through
-     * updateState(TimedOut) first gives StatusActivity a chance to react
-     * by unbinding itself (see its onStateChanged()), which is the only
-     * thing that can actually let the service finish dying.
-     */
     private fun stopSelfDueToNoConnection() {
         Log.w(TAG, "No Bluetooth connection in ${NO_CONNECTION_TIMEOUT_MS / 1000}s, stopping")
-        updateState(ConnectionState.TimedOut)
+        stopServiceImmediately(ConnectionState.TimedOut)
+    }
+
+    /**
+     * The one place that actually tears the service down — used by a
+     * user-requested stop, Quit, and the no-connection timeout alike.
+     * Deliberately does NOT rely on onDestroy() to do this work: a Service
+     * stays alive as long as it's started OR bound, so if StatusActivity
+     * happens to be bound (app open) when this is requested, onDestroy()
+     * might not run for an arbitrarily long time — and simply calling
+     * stopSelf() wouldn't touch the running connectionLoop() at all.
+     *
+     * cancel() alone isn't enough either: it can't interrupt a raw
+     * blocking call already in flight (BluetoothSocket.connect(),
+     * InputStream.read()), so closeConnection() is called here too —
+     * closing the socket directly unblocks any such call from wherever
+     * it's stuck, which is what actually makes "stop" mean *now* rather
+     * than "whenever the coroutine next happens to check."
+     *
+     * Called from both the main thread (onStartCommand) and this
+     * service's own IO-dispatcher coroutine (the timeout path) — see the
+     * @Volatile fields above for why that's safe.
+     */
+    private fun stopServiceImmediately(finalState: ConnectionState) {
+        connectionJob?.cancel()
+        closeConnection()
+        updateState(finalState)
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
@@ -238,12 +296,7 @@ class ObdForegroundService : Service() {
         // hard SecurityException that blocks every connection attempt.
         val device = adapter.getRemoteDevice(Mobile.deviceMAC())
         val newSocket = device.createRfcommSocketToServiceRecord(SPP_UUID)
-        try {
-            newSocket.connect() // blocks until connected or throws IOException
-        } catch (e: Exception) {
-            newSocket.close() // connect() failed: don't leak the socket/fd
-            throw e
-        }
+        connectSocket(newSocket)
 
         val storagePath = File(filesDir, "readings.jsonl").absolutePath
         val newSession = try {
@@ -254,6 +307,17 @@ class ObdForegroundService : Service() {
         }
 
         return ConnectionHandles(newSocket, newSession)
+    }
+
+    /** Extracted from openConnection() so the socket-leak-on-failure fix is directly unit-testable. */
+    @VisibleForTesting
+    internal fun connectSocket(socket: BluetoothSocket) {
+        try {
+            socket.connect() // blocks until connected or throws IOException
+        } catch (e: Exception) {
+            socket.close() // connect() failed: don't leak the socket/fd
+            throw e
+        }
     }
 
     private val sessionListener = ReadingListener { _, name, unit, value, _ ->
@@ -339,12 +403,19 @@ class ObdForegroundService : Service() {
             Intent(this, ObdForegroundService::class.java).setAction(ACTION_STOP),
             PendingIntent.FLAG_IMMUTABLE
         )
+        val quitIntent = PendingIntent.getService(
+            this,
+            0,
+            Intent(this, ObdForegroundService::class.java).setAction(ACTION_QUIT),
+            PendingIntent.FLAG_IMMUTABLE
+        )
         val text = when (state) {
             is ConnectionState.Connecting -> getString(R.string.notification_connecting, Mobile.deviceMAC())
             is ConnectionState.Connected -> getString(R.string.notification_connected, Mobile.deviceMAC())
             is ConnectionState.Disconnected -> getString(R.string.notification_disconnected, state.retryInSeconds)
             is ConnectionState.PermissionMissing -> getString(R.string.notification_permission_missing)
             is ConnectionState.TimedOut -> getString(R.string.notification_timed_out)
+            is ConnectionState.Stopped -> getString(R.string.notification_stopped)
         }
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle(getString(R.string.notification_title))
@@ -352,6 +423,7 @@ class ObdForegroundService : Service() {
             .setSmallIcon(R.drawable.ic_notification)
             .setContentIntent(contentIntent)
             .addAction(R.drawable.ic_stop, getString(R.string.notification_stop_action), stopIntent)
+            .addAction(R.drawable.ic_quit, getString(R.string.notification_quit_action), quitIntent)
             .setOngoing(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .build()
@@ -368,15 +440,23 @@ class ObdForegroundService : Service() {
         private const val POLL_CYCLE_MS = 250L
         private const val PERMISSION_POLL_INTERVAL_MS = 3_000L
         private const val NO_CONNECTION_TIMEOUT_MS = 5 * 60 * 1_000L
-        private const val ACTION_STOP = "com.carmonitor.app.action.STOP"
+        @VisibleForTesting
+        internal const val ACTION_STOP = "com.carmonitor.app.action.STOP"
+        @VisibleForTesting
+        internal const val ACTION_QUIT = "com.carmonitor.app.action.QUIT"
 
         fun start(context: Context) {
             ContextCompat.startForegroundService(context, Intent(context, ObdForegroundService::class.java))
         }
 
-        /** Stops monitoring. Reopening the app (or the next boot) starts it again. */
+        /** Fully stops monitoring — see stopServiceImmediately(). Tap "Start Scanning" to resume. */
         fun stop(context: Context) {
             context.startService(Intent(context, ObdForegroundService::class.java).setAction(ACTION_STOP))
+        }
+
+        /** Stops monitoring and kills the whole app process — see onStartCommand(). */
+        fun quit(context: Context) {
+            context.startService(Intent(context, ObdForegroundService::class.java).setAction(ACTION_QUIT))
         }
     }
 }

@@ -11,17 +11,21 @@
     <string name="notification_disconnected">Disconnected — retrying in %1$ds</string>
     <string name="notification_permission_missing">Bluetooth permission needed</string>
     <string name="notification_stop_action">Stop</string>
+    <string name="notification_quit_action">Quit App</string>
     <string name="notification_timed_out">No Bluetooth connection for 5 minutes — stopped</string>
+    <string name="notification_stopped">Stopped</string>
 
     <string name="status_connecting">Connecting…</string>
     <string name="status_connected">Connected</string>
     <string name="status_disconnected">Disconnected — retrying in %1$ds</string>
     <string name="status_permission_missing">Grant Bluetooth permission to start monitoring</string>
-    <string name="status_stopped">Stopped. Reopen the app to start monitoring again.</string>
-    <string name="status_timed_out">No Bluetooth connection for 5 minutes, so monitoring stopped. Reopen the app to try again.</string>
+    <string name="status_stopped">Stopped. Tap Start Scanning to resume.</string>
+    <string name="status_timed_out">No Bluetooth connection for 5 minutes, so monitoring stopped. Tap Start Scanning to try again.</string>
 
     <string name="reading_row_format">%1$s: %2$s %3$s</string>
 
     <string name="battery_optimization_button">Exempt from battery optimization</string>
     <string name="stop_button">Stop monitoring</string>
+    <string name="start_scanning_button">Start Scanning</string>
+    <string name="quit_app_button">Quit App</string>
 </resources>
