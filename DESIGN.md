@@ -200,26 +200,52 @@ and `jq`, trivial to replace with a real DB later if querying needs grow.
   (e.g. 30s max), rather than a tight retry loop draining the battery.
 - If no connection is ever reached (or re-reached) within 5 minutes —
   counting time spent waiting on a missing Bluetooth permission too — the
-  service stops itself, rather than retrying indefinitely against a
-  dongle that's never going to answer (car parked out of range, dongle
-  unplugged, etc). It cannot simply call `stopForeground`+`stopSelf` the
-  way the user-initiated stop below does: a Service stays alive as long
-  as it's started *or* bound, and unlike a button tap inside
-  `StatusActivity`, this decision originates inside the service's own
-  coroutine with no way to make an already-bound Activity unbind. It
-  routes through a dedicated `ConnectionState.TimedOut` first so
-  `StatusActivity` gets a chance to unbind itself before the service
-  actually tears down — skipping that step would silently strand a bound
-  client on stale "retrying" text after the notification disappears.
+  service stops itself (`ConnectionState.TimedOut`) via the same
+  `stopServiceImmediately()` described below, rather than retrying
+  indefinitely against a dongle that's never going to answer (car parked
+  out of range, dongle unplugged, etc).
 - User will need to exempt the app from battery optimization
   (`ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS`) for reliable long-run
   background behavior — call this out in-app and in the README.
-- User-initiated stop: a "Stop monitoring" button on the status screen and
-  a "Stop" action on the persistent notification both send the same
-  `ACTION_STOP` intent to `ObdForegroundService`, which tears down the
-  socket/session and removes the notification (`START_NOT_STICKY`, so it
-  does not come back on its own the way a system-triggered kill would).
-  Reopening the app starts monitoring again.
+- **Stopping is synchronous and immediate, not just requested.** A "Stop
+  monitoring" / "Start Scanning" toggle button on the status screen, and a
+  "Stop" action on the persistent notification, both send `ACTION_STOP` to
+  `ObdForegroundService`. `stopServiceImmediately()` — the single teardown
+  path shared by a manual stop, Quit (next bullet), and the timeout above
+  — does three things, in order, and all three matter:
+  1. `connectionJob?.cancel()` — but cancellation alone cannot interrupt a
+     blocking call already in flight (`BluetoothSocket.connect()`,
+     `InputStream.read()`), so this only takes effect at the coroutine's
+     next suspension point.
+  2. `closeConnection()`, called directly rather than left to `onDestroy()`
+     — closing the socket is what actually unblocks a call from (1)
+     stuck mid-flight, from whichever thread it's stuck on.
+  3. `updateState()` with the terminal state, *then*
+     `stopForeground`+`stopSelf`.
+
+  This exists because two earlier, real bugs made "Stop" unreliable:
+  `connectionLoop()`'s `catch (e: Exception)` was catching
+  `CancellationException` too (a plain `Exception` subtype in Kotlin) and
+  treating a requested stop as just another failed attempt to retry —
+  fixed by rethrowing it explicitly, before any broader catch clause. And
+  a Service stays alive as long as it's started *or* bound, so a bound
+  `StatusActivity` (app left open) meant `stopSelf()` alone did nothing
+  and `onDestroy()` might never run — `StatusActivity` now unbinds itself
+  in direct response to any terminal `ConnectionState` (`Stopped`,
+  `TimedOut`) rather than that being incidental to who happened to call
+  `updateState()`.
+
+  Resuming after a stop is **always explicit** — tapping "Start Scanning"
+  is the only way; reopening the app on its own does not resume
+  monitoring (a fresh launch that was never stopped is unaffected, and
+  still starts automatically as before).
+- **Quit App**: a second action, on both the notification and the status
+  screen, sends `ACTION_QUIT` — same teardown as Stop, then
+  `Process.killProcess(Process.myPid())`. This takes the whole app process
+  down, `StatusActivity` included, since everything runs in one process
+  (no multi-process manifest config) — the standard way an Android app
+  provides a true "exit," as opposed to Android's normal expectation that
+  the OS manages process lifecycle.
 
 ## 8. Permissions
 
@@ -370,3 +396,65 @@ toolchain setup. Tradeoffs worth knowing:
   exposes no timing info today. Moving it into Go (e.g. an interval per
   `vehicle.Profile`, or per-`PID`) would let a future vehicle with
   different sampling needs express that without touching Kotlin.
+
+## 13. Testing
+
+**`go/`**: table-driven `testing` package tests, one file per source file
+(`obd2_test.go` next to `obd2.go`, etc.) — the existing, only convention.
+`githooks/pre-commit` enforces both that these pass and a 100% statement
+coverage floor (`go test -coverprofile=...` + `go tool cover -func=...`,
+see `CLAUDE.md`'s "Coverage is enforced" section for exactly how). A
+GitHub Actions workflow (`.github/workflows/coverage.yml`) re-runs the
+same check on push/PR and emails on any regression below 100% — a safety
+net for a bypassed local hook or a fresh clone, not the primary gate.
+
+**`android/`**: JUnit4 + [Robolectric](http://robolectric.org/) (runs
+Android framework code on the plain JVM — no emulator/device needed,
+which matters given this project's dev environment has no working KVM
+access) + [MockK](https://mockk.io/) for collaborators that Robolectric
+doesn't simulate well (`BluetoothSocket`). Test sources live in
+`android/app/src/test/java/com/carmonitor/app/`, run via
+`./gradlew testDebugUnitTest`. Dependencies are `testImplementation` in
+`app/build.gradle.kts`; `testOptions { unitTests { isIncludeAndroidResources = true } }`
+lets Robolectric resolve `R.string.*`/`R.layout.*` in tests. Coroutines
+are exercised against the real `Dispatchers.IO` rather than
+`kotlinx-coroutines-test`'s virtual time — `ObdForegroundService`'s `scope`
+has no injectable-dispatcher seam today, and adding one purely for test
+determinism (accepting a few real seconds of wall-clock time per test
+instead) wasn't judged worth the production-code change for what this
+suite currently needs; revisit if that stops being true.
+`ObdForegroundService.connectionJob`/`connectSocket()`/`ACTION_STOP`/`ACTION_QUIT`
+and `StatusActivity.isBound` are `internal` + `@VisibleForTesting` rather
+than `private`, specifically so these regression tests can observe them
+directly instead of reverse-engineering state through side effects.
+
+**Coverage parity between `go/` and `android/` is a deliberate
+non-goal for now.** `go/` reaching a real, enforced 100% is
+straightforward — it's business logic with no framework I/O to mock. Doing
+the same for `android/` would mean exhaustively simulating every
+Bluetooth/Service-lifecycle framework interaction and failure mode through
+Robolectric/MockK, which is a materially larger and more speculative
+undertaking than closing five small gaps in pure Go functions. `android/`
+tests focus on regression coverage for bugs actually found (see below) —
+real, meaningful branches — over chasing a percentage. CI reports Android
+coverage (Kover) as a build artifact; it isn't gated. Revisit this once
+the Android test suite has enough real breadth that a numeric floor would
+mean something.
+
+**Regression tests, backfilled for bugs fixed this session** (per
+`CLAUDE.md`'s "every caught bug gets a regression test," applied
+retroactively where it still tests current behavior — not for behavior
+this same round of changes deleted, like the old auto-resume-on-reopen):
+`connectSocket()` (extracted from `openConnection()`) closing the socket
+on a failed `connect()`; `onStartCommand()` refusing to launch a second
+concurrent `connectionLoop()`; `ACTION_STOP` actually cancelling the
+active `connectionJob` synchronously rather than only requesting a stop
+that the still-running loop could outlive (the root cause of "tap Stop,
+it retries anyway"); and both `TimedOut` and `Stopped` states unbinding
+`StatusActivity` from the service. `ACTION_QUIT` is deliberately *not*
+exercised through an automated test — its handler ends in
+`Process.killProcess(Process.myPid())`, which would kill the test JVM
+itself, not just an app-under-test process, and there's no Robolectric
+shadow worth trusting there. It shares `ACTION_STOP`'s exact
+`stopServiceImmediately()` call, which the `ACTION_STOP` test already
+covers; the kill call itself is one line, checked by direct code review.
