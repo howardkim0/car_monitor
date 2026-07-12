@@ -118,12 +118,12 @@ Kotlin is intentionally kept dumb (I/O plumbing + Android ceremony).
 // internal/device/device.go
 type Profile struct {
     Name       string // human-readable, e.g. "OBDLink MX+"
-    MACAddress string // "AA:BB:CC:DD:EE:FF"
+    MACAddress string // "00:1D:A5:68:98:8A"
     Protocol   string // "spp" (classic RFCOMM) — only one supported today
 }
 
 var known = []Profile{
-    {Name: "Garage OBDLink", MACAddress: "AA:BB:CC:DD:EE:FF", Protocol: "spp"},
+    {Name: "Garage OBDLink", MACAddress: "00:1D:A5:68:98:8A", Protocol: "spp"},
 }
 
 func Default() Profile { return known[0] }

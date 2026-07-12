@@ -77,7 +77,7 @@ func TestSessionCommands(t *testing.T) {
 }
 
 func TestDeviceMAC(t *testing.T) {
-	if got := DeviceMAC(); got != "AA:BB:CC:DD:EE:FF" {
+	if got := DeviceMAC(); got != "00:1D:A5:68:98:8A" {
 		t.Errorf("DeviceMAC() = %q, want the hardcoded garage adapter MAC", got)
 	}
 }

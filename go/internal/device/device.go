@@ -26,7 +26,7 @@ type Profile struct {
 var known = []Profile{
 	{
 		Name:       "Garage OBDLink",
-		MACAddress: "AA:BB:CC:DD:EE:FF",
+		MACAddress: "00:1D:A5:68:98:8A",
 		Protocol:   ProtocolSPP,
 	},
 }

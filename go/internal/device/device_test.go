@@ -7,7 +7,7 @@ import (
 
 func TestDefault(t *testing.T) {
 	got := Default()
-	if got.MACAddress != "AA:BB:CC:DD:EE:FF" {
+	if got.MACAddress != "00:1D:A5:68:98:8A" {
 		t.Errorf("Default().MACAddress = %q, want the hardcoded garage adapter MAC", got.MACAddress)
 	}
 	if got.Protocol != ProtocolSPP {
@@ -21,8 +21,8 @@ func TestByMAC(t *testing.T) {
 		mac    string
 		wantOK bool
 	}{
-		{name: "exact match", mac: "AA:BB:CC:DD:EE:FF", wantOK: true},
-		{name: "case insensitive match", mac: "aa:bb:cc:dd:ee:ff", wantOK: true},
+		{name: "exact match", mac: "00:1D:A5:68:98:8A", wantOK: true},
+		{name: "case insensitive match", mac: "00:1d:a5:68:98:8a", wantOK: true},
 		{name: "unknown mac", mac: "11:22:33:44:55:66", wantOK: false},
 	}
 
