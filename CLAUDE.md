@@ -27,7 +27,7 @@ Where a change is well-specified (the file(s), the exact diff, and the
 intent are already clear — e.g. from a plan, a reviewed spec, or explicit
 instructions), delegate the actual implementation to a Haiku-model
 subagent rather than writing it inline. Reserve Sonnet/Opus-level
-reasoning for planning, architecture decisions, three-persona review, and
+reasoning for planning, architecture decisions, two-persona review, and
 ambiguous judgment calls; hand mechanical implementation to Haiku once
 the "what" and "how" are already decided. Batch independent Haiku tasks
 in parallel rather than running them serially. This keeps token spend
