@@ -131,7 +131,7 @@ class ObdForegroundServiceTest {
         val service = newService()
         val manager = service.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
 
-        val channel = manager.getNotificationChannel(ObdForegroundService.CHANNEL_ID_ANOMALY)
+        val channel = manager.getNotificationChannel(AnomalyNotifications.CHANNEL_ID)
 
         assertNotNull("anomaly notification channel should be created in onCreate()", channel)
         assertEquals(NotificationManager.IMPORTANCE_HIGH, channel!!.importance)
@@ -155,7 +155,7 @@ class ObdForegroundServiceTest {
             ?.notification
 
         assertNotNull("expected a notification posted for the Coolant Temperature anomaly", posted)
-        assertEquals(ObdForegroundService.CHANNEL_ID_ANOMALY, posted!!.channelId)
+        assertEquals(AnomalyNotifications.CHANNEL_ID, posted!!.channelId)
     }
 
     // ACTION_QUIT is deliberately NOT exercised through onStartCommand()

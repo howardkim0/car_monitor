@@ -1,12 +1,17 @@
 package com.carmonitor.app
 
+import android.app.NotificationManager
+import android.content.Context
 import org.junit.After
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.android.controller.ActivityController
 import org.robolectric.annotation.Config
@@ -95,5 +100,40 @@ class StatusActivityTest {
         controller.destroy()
 
         assertFalse("expected the export coroutine scope to be cancelled on destroy", activity.exportScopeIsActive())
+    }
+
+    @Test
+    fun `Test Alert button posts a notification even when stopped by user`() {
+        // Regression test: the Test Alert button (per DESIGN.md section 4
+        // step 6) must work independently of whether the service is running
+        // or was explicitly stopped by the user. This proves the feature's
+        // entire design decision holds: routing it through AnomalyNotifications
+        // instead of the Service means it works regardless of service state.
+        val app = RuntimeEnvironment.getApplication()
+
+        // Set up the activity in "stopped by user" state so it doesn't bind
+        // to or start ObdForegroundService
+        val prefs = app.getSharedPreferences("car_monitor_prefs", Context.MODE_PRIVATE)
+        prefs.edit().putBoolean("stoppedByUser", true).apply()
+
+        val activity = newActivity()
+        assertFalse("activity in stopped-by-user state should not be bound", activity.isBound)
+
+        // Tap the Test Alert button
+        activity.findViewById<android.widget.Button>(R.id.testAlertButton).performClick()
+
+        // Assert a notification was posted on the anomaly channel
+        val manager = app.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        val testAlertMetricName = app.getString(R.string.test_alert_metric_name)
+        val wantId = 1000 + (testAlertMetricName.hashCode() and 0xFF)
+        val posted = manager.activeNotifications
+            .firstOrNull { it.id == wantId }
+            ?.notification
+
+        assertNotNull(
+            "Test Alert button must post a notification even when stopped by user",
+            posted
+        )
+        assertEquals(AnomalyNotifications.CHANNEL_ID, posted!!.channelId)
     }
 }

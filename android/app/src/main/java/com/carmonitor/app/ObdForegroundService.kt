@@ -357,25 +357,7 @@ class ObdForegroundService : Service() {
      */
     @VisibleForTesting
     internal val anomalyListener = AnomalyListener { metric, level, message, _ ->
-        val notification = NotificationCompat.Builder(this, CHANNEL_ID_ANOMALY)
-            .setContentTitle(getString(R.string.notification_anomaly_title, metric))
-            .setContentText(message)
-            .setSmallIcon(R.drawable.ic_notification)
-            .setContentIntent(
-                PendingIntent.getActivity(
-                    this,
-                    0,
-                    Intent(this, StatusActivity::class.java),
-                    PendingIntent.FLAG_IMMUTABLE
-                )
-            )
-            .setPriority(
-                if (level == "CRITICAL") NotificationCompat.PRIORITY_MAX else NotificationCompat.PRIORITY_DEFAULT
-            )
-            .setAutoCancel(true)
-            .build()
-        val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        manager.notify(ANOMALY_NOTIFICATION_ID_BASE + (metric.hashCode() and 0xFF), notification)
+        AnomalyNotifications.post(this, metric, level, message)
     }
 
     /** Suspends until the reader or writer loop throws (i.e. the socket died). */
@@ -508,15 +490,7 @@ class ObdForegroundService : Service() {
     }
 
     private fun createAnomalyNotificationChannel() {
-        val channel = NotificationChannel(
-            CHANNEL_ID_ANOMALY,
-            getString(R.string.notification_anomaly_channel_name),
-            NotificationManager.IMPORTANCE_HIGH
-        ).apply {
-            description = getString(R.string.notification_anomaly_channel_description)
-        }
-        val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        manager.createNotificationChannel(channel)
+        AnomalyNotifications.ensureChannel(this)
     }
 
     private fun buildNotification(state: ConnectionState): Notification {
@@ -562,11 +536,6 @@ class ObdForegroundService : Service() {
         private const val TAG = "ObdForegroundService"
         private const val CHANNEL_ID = "obd2_status"
         private const val NOTIFICATION_ID = 1
-        @VisibleForTesting
-        internal const val CHANNEL_ID_ANOMALY = "obd2_anomaly"
-        // Offset from NOTIFICATION_ID (1) so an anomaly notification can
-        // never collide with the persistent status one.
-        private const val ANOMALY_NOTIFICATION_ID_BASE = 1000
         private val SPP_UUID: UUID = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
         private const val INITIAL_BACKOFF_MS = 1_000L
         private const val MAX_BACKOFF_MS = 30_000L

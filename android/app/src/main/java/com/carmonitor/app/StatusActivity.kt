@@ -45,6 +45,7 @@ class StatusActivity : AppCompatActivity(), ObdForegroundService.StatusListener 
     private lateinit var batteryOptimizationButton: Button
     private lateinit var exportButton: Button
     private lateinit var copySshKeyButton: Button
+    private lateinit var testAlertButton: Button
     private lateinit var stopButton: Button
     private lateinit var quitButton: Button
 
@@ -108,6 +109,8 @@ class StatusActivity : AppCompatActivity(), ObdForegroundService.StatusListener 
         copySshKeyButton = findViewById(R.id.copySshKeyButton)
         copySshKeyButton.isEnabled = false
         copySshKeyButton.setOnClickListener { copySshKeyToClipboard() }
+        testAlertButton = findViewById(R.id.testAlertButton)
+        testAlertButton.setOnClickListener { showTestAlert() }
         stopButton = findViewById(R.id.stopButton)
         stopButton.setOnClickListener { if (stoppedByUser) startScanning() else stopMonitoring() }
         quitButton = findViewById(R.id.quitButton)
@@ -355,6 +358,16 @@ class StatusActivity : AppCompatActivity(), ObdForegroundService.StatusListener 
             getString(R.string.ssh_key_copied),
             Toast.LENGTH_SHORT
         ).show()
+    }
+
+    private fun showTestAlert() {
+        AnomalyNotifications.ensureChannel(this)
+        AnomalyNotifications.post(
+            this,
+            getString(R.string.test_alert_metric_name),
+            "WARNING",
+            getString(R.string.test_alert_message)
+        )
     }
 
     companion object {
