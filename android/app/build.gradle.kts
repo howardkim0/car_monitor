@@ -16,9 +16,35 @@ android {
         versionName = "1.0"
     }
 
+    // Set only in CI (see .github/workflows/release-apk.yml): signs the debug
+    // build with a persistent keystore instead of the ephemeral, per-runner
+    // debug.keystore AGP auto-generates on a fresh machine. Without this,
+    // every CI build carries a different signature and Android refuses to
+    // install a new one over the last (it looks like a different app) —
+    // installing an update requires uninstalling first. Absent locally, so
+    // `./gradlew assembleDebug` on a dev machine is unaffected and keeps
+    // using that machine's own debug.keystore. See DESIGN.md section 11.
+    val ciKeystorePath = System.getenv("CM_RELEASE_KEYSTORE_PATH")
+
+    if (ciKeystorePath != null) {
+        signingConfigs {
+            create("ci") {
+                storeFile = file(ciKeystorePath)
+                storePassword = System.getenv("CM_RELEASE_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("CM_RELEASE_KEY_ALIAS")
+                keyPassword = System.getenv("CM_RELEASE_KEY_PASSWORD")
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
+        }
+        debug {
+            if (ciKeystorePath != null) {
+                signingConfig = signingConfigs.getByName("ci")
+            }
         }
     }
 

@@ -13,3 +13,9 @@ android/*.iml
 android/app/*.iml
 android/captures/
 android/*.apk
+
+# Release signing key material must never be committed — it's a GitHub
+# Actions secret (see .github/workflows/release-apk.yml), decoded to a
+# runner-temp path at build time, not stored in the repo.
+*.keystore
+*.jks

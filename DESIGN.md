@@ -494,10 +494,11 @@ adb install -r car-monitor-debug.apk
 ```
 
 (or just download `car-monitor-debug.apk` from the release page in a
-browser and `adb install -r` it). The workflow deletes and recreates the
-`latest` release each run, so it always reflects the current `main` HEAD —
-there's no version history beyond what `git log` on `main` already gives
-you.
+browser and `adb install -r` it — or just tap it on-device once "install
+unknown apps" is allowed for the browser/Files app, no `adb` needed). The
+workflow deletes and recreates the `latest` release each run, so it always
+reflects the current `main` HEAD — there's no version history beyond what
+`git log` on `main` already gives you.
 
 Build outputs are otherwise gitignored (`android/build/`,
 `android/app/build/`, `android/app/libs/*.aar`, `android/*.apk`) since
@@ -508,11 +509,35 @@ every relevant change (git can't diff binaries) — publishing to Releases
 instead gets the same "always have a ready-to-sideload build" property
 without either cost.
 
-Tradeoff worth knowing: it's **debug-signed**, not release-signed — there's
-no release keystore in this repo (generating and storing a signing key is a
-separate, more sensitive decision than "publish the build output"). Fine
-for sideloading on your own device; not suitable for wider distribution
-without setting up real release signing first.
+**Signing.** The build stays the `debug` build type (`android:debuggable`
+is still `true` — this is not a hardened, Play-Store-style release build,
+and `isMinifyEnabled` is off), but `android/app/build.gradle.kts` gives it
+a stable signing key when four `CM_RELEASE_*` environment variables are
+present, which `release-apk.yml` sets from repo secrets
+(`RELEASE_KEYSTORE_BASE64`, `RELEASE_KEYSTORE_PASSWORD`, `RELEASE_KEY_ALIAS`,
+`RELEASE_KEY_PASSWORD`) — decoding the keystore to a `RUNNER_TEMP` path,
+never into the repo. Without those secrets configured, the build silently
+falls back to whatever ephemeral `debug.keystore` that CI run's fresh VM
+auto-generates, same as before this existed.
+
+The problem this solves: Android refuses to install an APK over an
+existing app unless the signatures match, and a fresh debug.keystore gets
+auto-generated on every CI runner (a new VM each run) — so without a
+persistent key, every `latest` release used to carry a different
+signature, and updating meant uninstalling the old one first. A locally
+built `./gradlew assembleDebug` is unaffected either way (still signed
+with that machine's own persistent `~/.android/debug.keystore`); only CI
+builds needed this.
+
+One migration note: a phone that already has a build installed from
+*before* the CI secrets were configured needs one manual uninstall — after
+that, every future `latest` release shares the same key and installs as a
+normal in-place update. Losing the keystore, or its passwords, means
+generating a new one and going through that same one-time uninstall again
+on every device; leaking it would let anyone produce an APK Android treats
+as a legitimate update to this app, so it's kept out of the repo entirely
+(GitHub secrets only, never committed — see `.gitignore`'s `*.keystore`/
+`*.jks` rules).
 
 ## 12. Open questions / future work
 

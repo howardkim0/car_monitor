@@ -44,7 +44,24 @@ jobs:
 
       - name: Build debug APK
         working-directory: android
-        run: ./gradlew assembleDebug --console=plain
+        env:
+          RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+          RELEASE_KEYSTORE_PASSWORD: ${{ secrets.RELEASE_KEYSTORE_PASSWORD }}
+          RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+          RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
+        run: |
+          if [ -n "$RELEASE_KEYSTORE_BASE64" ]; then
+            keystore_path="${RUNNER_TEMP}/release.keystore"
+            echo "$RELEASE_KEYSTORE_BASE64" | base64 -d > "$keystore_path"
+            export CM_RELEASE_KEYSTORE_PATH="$keystore_path"
+            export CM_RELEASE_KEYSTORE_PASSWORD="$RELEASE_KEYSTORE_PASSWORD"
+            export CM_RELEASE_KEY_ALIAS="$RELEASE_KEY_ALIAS"
+            export CM_RELEASE_KEY_PASSWORD="$RELEASE_KEY_PASSWORD"
+            echo "Signing with the persistent release keystore."
+          else
+            echo "RELEASE_KEYSTORE_BASE64 not set; falling back to an ephemeral per-runner debug key. Installs won't update in place until the release-signing secrets are configured — see DESIGN.md section 11."
+          fi
+          ./gradlew assembleDebug --console=plain
 
       - name: Publish to the "latest" release
         env:
