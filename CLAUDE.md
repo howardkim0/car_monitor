@@ -36,38 +36,20 @@ size of the diff.
 
 ## DESIGN.md changes need an Architect pass first
 
-Any edit to `DESIGN.md` — however small — gets an explicit
-Architect-persona review (the same persona from the three-persona review
-below) before it's committed, even if the rest of the change is trivial
-wording. Run it as an actual separate pass, not a mental check while
-writing the diff: does the change fit the existing `go/`/`android/` split
-and the extensibility boundaries in §5, does it contradict something
-elsewhere in the doc, does it accurately describe what the code actually
-does. `DESIGN.md` drifting from the code is exactly what "read the design
-doc first, every time" above is trying to prevent — an unreviewed doc
-change is how that drift starts.
+Any edit to `DESIGN.md` — however small — gets an explicit Architect-persona review before it's committed. Run it as an actual separate pass (or a dedicated quick subagent) rather than a mental check while writing the diff. Check if the change fits the `go/`/`android/` split and the extensibility boundaries in §5, and ensure the doc matches the code. Leverage `agy` commands (e.g. `agy grep`, `agy find`) or Antigravity's codebase tools for rapid, token-efficient context discovery.
 
-## Three-persona review before every commit
+## Two-persona review before every commit
 
-No code change gets committed on the basis of a single pass. Review it from
-these three perspectives, in order, before committing — don't collapse them
-into one glance at the diff. For anything beyond a trivial change, run each
-perspective as an actual separate pass (e.g. the `code-review` skill, or a
-dedicated review subagent), not three bullet points ticked off in your head.
+To minimize token usage and keep context size optimal, no code change is committed on a single pass. Perform a review from these two perspectives. For non-trivial changes, run these as separate passes or lightweight subagents (e.g. `self` or `research` subagents). Use `agy` codebase research tools (like `grep_search` or `view_file` with precise line ranges) inside these persona passes to quickly pull needed context without reading whole files:
 
-1. **Architect** — Does this fit `DESIGN.md`'s architecture? Does it respect
-   the device/vehicle extensibility boundaries (new behavior goes through
-   `device.Profile` / `vehicle.Profile`, never a hardcoded MAC or PID
-   scattered into calling code)? Does it live in the right package
-   (`internal/obd2`, `internal/device`, `internal/vehicle`,
-   `internal/storage`, `mobile`) per the doc's data flow?
-2. **Senior engineer** — Is the logic correct (decode formulas, ELM327
-   framing, error handling, concurrency)? Are edge cases covered by tests
-   (partial reads, unknown PIDs, malformed lines, closed stores)? Is it
-   idiomatic Go, free of dead code and unneeded abstraction?
-3. **UX designer** — For anything user-visible (notification text, status
-   screen, error states): would a car owner, not an engineer, understand
-   what the app is doing and why?
+1. **Architect** — Does this fit `DESIGN.md`'s architecture and boundaries? Check that new device/vehicle behavior goes through `device.Profile`/`vehicle.Profile` and lives in the correct package (`internal/obd2`, `internal/device`, `internal/vehicle`, `internal/storage`, `mobile`).
+2. **Senior Engineer** — Is the logic correct (formulas, framing, concurrency, error handling)? Are edge cases covered by unit tests? Is it idiomatic Go, free of dead code?
+
+## Token Efficiency Guidelines
+
+- **Targeted File Reading**: Never view entire files if you only need a specific section. Use `view_file` with `StartLine` and `EndLine`.
+- **Precise Search**: Prefer `grep_search` (with file globs) or `agy` CLI search commands to locate symbols/patterns instead of listing directories recursively or scanning files line by line.
+- **Short Command Output**: Run terminal commands with output limits (e.g. `git log -n 5`, `go test -v ./... -run TestSpecific`) to prevent flooding the context.
 
 ## Every caught bug gets a regression test
 

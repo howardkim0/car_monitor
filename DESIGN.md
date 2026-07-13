@@ -89,6 +89,9 @@ Kotlin is intentionally kept dumb (I/O plumbing + Android ceremony).
 │                            │  ├───────────────────────────┤  │                  │
 │                            │  │ internal/applog (size-     │  │                  │
 │                            │  │   capped app/error log)    │  │                  │
+│                            │  ├───────────────────────────┤  │                  │
+│                            │  │ internal/trend (trend      │  │                  │
+│                            │  │   detection & anomalies)   │  │                  │
 │                            │  └───────────────────────────┘  │                  │
 │                            └────────────────────────────────┘                   │
 └──────────────────────────────────────────────────────────────────────────────────┘
@@ -110,6 +113,11 @@ Kotlin is intentionally kept dumb (I/O plumbing + Android ceremony).
    dropped — it goes to `internal/applog` (section 6) instead. A decode
    failure (a malformed or truncated response line) is not logged; it's
    treated as expected noise on a real ELM327 link and simply skipped.
+   *(Note: The `internal/trend` package is a standalone library containing
+   anomaly detection functions for coolant/oil temperatures, battery, fuel
+   trims, and catalytic converter health. In this version, it is not yet
+   active in the live data path; readings are stored and forwarded without
+   on-the-fly trend checking. See Section 12 for future integration plans).*
 5. `internal/obd2` decides *which* PIDs to request, based on the active
    `vehicle.Profile`'s PID list and a discovery step (section 5.2) — Kotlin
    never needs to know what a PID is. *How often* to poll is, for v1, a
@@ -398,7 +406,8 @@ car_monitor/
 │   │   ├── device/           # known Bluetooth device profiles
 │   │   ├── vehicle/          # known vehicle profiles + PID maps
 │   │   ├── storage/          # CSV, UTC day-rotated reading log
-│   │   └── applog/           # size-capped app/error log
+│   │   ├── applog/           # size-capped app/error log
+│   │   └── trend/            # trend detection and anomaly checking
 │   └── mobile/               # gomobile bind entry point (exported API)
 ├── android/                  # Android Studio / Gradle project
 │   └── app/
@@ -538,6 +547,7 @@ without setting up real release signing first.
   list" call the real fix, which isn't worth doing for a mismatch that
   self-heals on the very next poll cycle (at most, one cycle skips or
   double-requests a PID).
+- **Integrating Trend/Anomaly Detection**: `internal/trend` is fully implemented and tested as a standalone library to monitor vehicle vitals (temperatures, battery, fuel trims, catalytic converter) and detect abnormal trends before they trigger DTCs. The next step is wiring this library into `mobile.Session`'s callback pipeline, accumulating sliding history windows, and determining how to expose anomalies (e.g. surfacing to Kotlin via `ReadingListener` or writing them to `applog`).
 
 ## 13. Testing
 
