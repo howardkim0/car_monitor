@@ -295,6 +295,16 @@ CSV-syntax-level damage instead, e.g. a torn final line from an unclean
 process kill mid-write); a file that can't be read at all — as opposed to
 simply not existing yet — is a real error.
 
+On every `NewSession` call (i.e., every Bluetooth connection), `mobile.Session`
+prunes reading-log files down to the 30 most recent by filename count, not
+by age: if the phone sits unused for two months, all 30 retained files can
+be well over 30 calendar days old — the rule is simply "keep the newest 30
+`readings-*.csv` files, delete the rest," never a calendar-day cutoff. Pruning
+happens after storage initialization succeeds but before the session is ready
+to accept data, and a failure to prune doesn't block session creation (it's
+logged as an error but treated as best-effort cleanup, not a precondition for
+the app to work).
+
 ### 6.2 App/error log
 
 Separate from the reading log deliberately: `internal/applog` is a
@@ -635,12 +645,6 @@ as a legitimate update to this app, so it's kept out of the repo entirely
   source of truth (e.g. named constants `vehicle` exports and `monitor`
   imports) would remove the possibility structurally instead of relying
   on a test to catch it.
-- Reading log files (section 6.1) rotate daily but are never deleted,
-  and the app log (section 6.2) is size-capped but not age-capped. Cap
-  retention at 30 days: add a prune pass (e.g. on rotation, or on a
-  periodic check like `ANOMALY_CHECK_INTERVAL_MS`) that deletes
-  reading-log files older than 30 days, so at most 30 daily files are
-  kept on device at once.
 - Manual log export from the app: a button on the status screen that
   lets the user pull the on-device reading-log CSVs (and/or the app
   log) off the phone without `adb` — most likely Android's share sheet

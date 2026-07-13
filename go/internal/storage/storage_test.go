@@ -445,3 +445,146 @@ func TestLoadReadingsErrorsWhenFileCannotBeOpened(t *testing.T) {
 		t.Error("LoadReadings against an unreadable file should error, got nil")
 	}
 }
+
+func TestPruneOldReadingLogs(t *testing.T) {
+	tests := []struct {
+		name        string
+		createFiles []string
+		keep        int
+		wantRemain  []string
+		expectError bool
+	}{
+		{
+			name:        "fewer files than keep",
+			createFiles: []string{"readings-2026-07-10.csv", "readings-2026-07-11.csv"},
+			keep:        5,
+			wantRemain:  []string{"readings-2026-07-10.csv", "readings-2026-07-11.csv"},
+			expectError: false,
+		},
+		{
+			name:        "exactly keep files",
+			createFiles: []string{"readings-2026-07-10.csv", "readings-2026-07-11.csv", "readings-2026-07-12.csv"},
+			keep:        3,
+			wantRemain:  []string{"readings-2026-07-10.csv", "readings-2026-07-11.csv", "readings-2026-07-12.csv"},
+			expectError: false,
+		},
+		{
+			name:        "more files than keep, removes oldest",
+			createFiles: []string{"readings-2026-07-10.csv", "readings-2026-07-11.csv", "readings-2026-07-12.csv", "readings-2026-07-13.csv", "readings-2026-07-14.csv"},
+			keep:        3,
+			wantRemain:  []string{"readings-2026-07-12.csv", "readings-2026-07-13.csv", "readings-2026-07-14.csv"},
+			expectError: false,
+		},
+		{
+			name:        "keep equals zero",
+			createFiles: []string{"readings-2026-07-10.csv", "readings-2026-07-11.csv"},
+			keep:        0,
+			wantRemain:  []string{},
+			expectError: false,
+		},
+		{
+			name:        "keep is negative",
+			createFiles: []string{"readings-2026-07-10.csv", "readings-2026-07-11.csv"},
+			keep:        -5,
+			wantRemain:  []string{},
+			expectError: false,
+		},
+		{
+			name:        "dates spanning far more than 30 days",
+			createFiles: []string{"readings-2026-05-10.csv", "readings-2026-05-20.csv", "readings-2026-06-15.csv", "readings-2026-07-10.csv", "readings-2026-07-12.csv"},
+			keep:        2,
+			wantRemain:  []string{"readings-2026-07-10.csv", "readings-2026-07-12.csv"},
+			expectError: false,
+		},
+		{
+			name:        "ignores non-matching files",
+			createFiles: []string{"readings-2026-07-10.csv", "notes.txt", "readings-2026-07-11.csv", "app.log"},
+			keep:        1,
+			wantRemain:  []string{"notes.txt", "app.log", "readings-2026-07-11.csv"},
+			expectError: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+
+			// Create the files
+			for _, filename := range tt.createFiles {
+				path := filepath.Join(dir, filename)
+				if err := os.WriteFile(path, []byte(""), 0o644); err != nil {
+					t.Fatalf("WriteFile: %v", err)
+				}
+			}
+
+			// Call PruneOldReadingLogs
+			err := PruneOldReadingLogs(dir, tt.keep)
+			if (err != nil) != tt.expectError {
+				t.Errorf("PruneOldReadingLogs error = %v, expectError = %v", err, tt.expectError)
+			}
+
+			// Check remaining files
+			entries, err := os.ReadDir(dir)
+			if err != nil {
+				t.Fatalf("ReadDir: %v", err)
+			}
+
+			var remaining []string
+			for _, entry := range entries {
+				remaining = append(remaining, entry.Name())
+			}
+
+			if len(remaining) != len(tt.wantRemain) {
+				t.Errorf("got %d files remaining, want %d: %v", len(remaining), len(tt.wantRemain), remaining)
+				return
+			}
+
+			for _, want := range tt.wantRemain {
+				found := false
+				for _, got := range remaining {
+					if got == want {
+						found = true
+						break
+					}
+				}
+				if !found {
+					t.Errorf("want file %q in remaining files, not found: %v", want, remaining)
+				}
+			}
+		})
+	}
+}
+
+func TestPruneOldReadingLogsGlobError(t *testing.T) {
+	// filepath.Glob returns an error if the pattern is invalid (e.g.,
+	// unclosed bracket). We can trigger this by using a dir path that,
+	// when joined with "readings-*.csv", creates an invalid pattern.
+	invalidDir := "/tmp/[invalid"
+	if err := PruneOldReadingLogs(invalidDir, 30); err == nil {
+		t.Error("PruneOldReadingLogs with invalid glob pattern should error, got nil")
+	}
+}
+
+func TestPruneOldReadingLogsRemoveError(t *testing.T) {
+	dir := t.TempDir()
+
+	// Create files and then make the directory read-only so Remove fails
+	for _, filename := range []string{"readings-2026-07-10.csv", "readings-2026-07-11.csv"} {
+		path := filepath.Join(dir, filename)
+		if err := os.WriteFile(path, []byte(""), 0o644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+	}
+
+	// Make directory read-only to cause Remove to fail
+	if err := os.Chmod(dir, 0o555); err != nil {
+		t.Fatalf("Chmod: %v", err)
+	}
+	defer os.Chmod(dir, 0o755) // restore so t.TempDir() cleanup can remove it
+
+	// PruneOldReadingLogs should return an error (best-effort)
+	err := PruneOldReadingLogs(dir, 1)
+	if err == nil {
+		t.Error("PruneOldReadingLogs with read-only dir should error, got nil")
+	}
+}

@@ -60,6 +60,9 @@ func NewSession(storageDir string, listener ReadingListener, anomalyListener Ano
 	if err != nil {
 		return nil, err
 	}
+	if err := storage.PruneOldReadingLogs(readingsDir, storage.MaxReadingLogFiles); err != nil {
+		LogError(fmt.Sprintf("prune reading logs: %v", err))
+	}
 	return newSessionWithStore(store, readingsDir, listener, anomalyListener), nil
 }
 

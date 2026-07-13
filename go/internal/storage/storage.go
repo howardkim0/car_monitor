@@ -13,6 +13,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"sync"
 	"time"
@@ -29,6 +30,10 @@ type Store interface {
 // dateFormat is the UTC calendar-day format used both in filenames and
 // to decide when to rotate — see DESIGN.md section 6.
 const dateFormat = "2006-01-02"
+
+// MaxReadingLogFiles is the target number of reading log files to retain.
+// Older files are deleted to keep only the newest this many files.
+const MaxReadingLogFiles = 30
 
 var csvHeader = []string{"pid", "name", "value", "unit", "timestamp"}
 
@@ -215,6 +220,42 @@ func LoadReadings(dir string) ([]obd2.Reading, error) {
 		}
 	}
 	return readings, nil
+}
+
+// PruneOldReadingLogs deletes readings-*.csv files in dir beyond the
+// keep most recent (by filename, which sorts chronologically).
+// Age is irrelevant — only count. keep <= 0 is treated as 0 (delete
+// everything matched). A glob or stat failure is a real error; a
+// per-file os.Remove failure is collected and returned but does not
+// stop pruning the rest (best-effort, matches this file's existing
+// "one bad file shouldn't wedge everything else" pattern).
+func PruneOldReadingLogs(dir string, keep int) error {
+	if keep < 0 {
+		keep = 0
+	}
+
+	matches, err := filepath.Glob(filepath.Join(dir, "readings-*.csv"))
+	if err != nil {
+		return fmt.Errorf("glob reading logs: %w", err)
+	}
+
+	if len(matches) <= keep {
+		return nil
+	}
+
+	sort.Strings(matches)
+	toRemove := matches[:len(matches)-keep]
+
+	var removeErr error
+	for _, path := range toRemove {
+		if err := os.Remove(path); err != nil {
+			if removeErr == nil {
+				removeErr = fmt.Errorf("remove reading log %q: %w", path, err)
+			}
+		}
+	}
+
+	return removeErr
 }
 
 func parseRow(row []string) (obd2.Reading, bool) {

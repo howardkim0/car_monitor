@@ -285,3 +285,98 @@ func TestDeviceMAC(t *testing.T) {
 		t.Errorf("DeviceMAC() = %q, want the hardcoded garage adapter MAC", got)
 	}
 }
+
+func TestNewSessionLogsPruneErrorButStillCreatesSession(t *testing.T) {
+	resetAppLogger(t)
+	logDir := t.TempDir()
+	if err := InitAppLog(logDir); err != nil {
+		t.Fatalf("InitAppLog: %v", err)
+	}
+	defer CloseAppLog()
+
+	// Create a storageDir with an invalid glob pattern character.
+	// When NewSession constructs readingsDir = filepath.Join(storageDir, "readings"),
+	// the glob pattern will be filepath.Join(readingsDir, "readings-*.csv"),
+	// which will contain the unmatched bracket and cause a glob error.
+	parent := t.TempDir()
+	storageDir := filepath.Join(parent, "[invalid")
+	if err := os.MkdirAll(storageDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+
+	// NewSession should still succeed (creating the session despite the prune error)
+	// and log the error
+	session, err := NewSession(storageDir, nil, nil)
+	if err != nil {
+		t.Fatalf("NewSession should succeed despite prune error, got: %v", err)
+	}
+	defer session.Close()
+
+	// Verify the error was logged
+	data, err := os.ReadFile(filepath.Join(logDir, "app.log"))
+	if err != nil {
+		t.Fatalf("reading app.log: %v", err)
+	}
+	if !strings.Contains(string(data), "prune reading logs") {
+		t.Errorf("app.log should record prune error, got: %s", string(data))
+	}
+}
+
+func TestNewSessionPrunesReadingLogsTo30(t *testing.T) {
+	storageDir := t.TempDir()
+	readingsDir := filepath.Join(storageDir, "readings")
+	if err := os.MkdirAll(readingsDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+
+	// Create 35 pre-existing reading log files (more than MaxReadingLogFiles=30)
+	for i := 0; i < 35; i++ {
+		dateStr := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC).AddDate(0, 0, i).Format("2006-01-02")
+		path := filepath.Join(readingsDir, "readings-"+dateStr+".csv")
+		if err := os.WriteFile(path, []byte("pid,name,value,unit,timestamp\n"), 0o644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+	}
+
+	// NewSession should prune down to 30 files (the 30 newest ones)
+	session, err := NewSession(storageDir, nil, nil)
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	defer session.Close()
+
+	entries, err := os.ReadDir(readingsDir)
+	if err != nil {
+		t.Fatalf("ReadDir: %v", err)
+	}
+
+	if len(entries) != 30 {
+		t.Errorf("got %d reading log files after pruning, want 30", len(entries))
+	}
+
+	// Verify that the oldest 5 files were removed (indices 0-4)
+	// The files created are for dates starting 2026-06-01 + i days
+	// So oldest would be 2026-06-01, 2026-06-02, ..., 2026-06-05
+	wantMissing := []string{
+		"readings-2026-06-01.csv",
+		"readings-2026-06-02.csv",
+		"readings-2026-06-03.csv",
+		"readings-2026-06-04.csv",
+		"readings-2026-06-05.csv",
+	}
+
+	for _, missingName := range wantMissing {
+		path := filepath.Join(readingsDir, missingName)
+		if _, err := os.Stat(path); err == nil {
+			t.Errorf("file %q should have been pruned, but still exists", missingName)
+		} else if !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("Stat %q: %v", path, err)
+		}
+	}
+
+	// Verify the newest file (2026-07-05, which is 2026-06-01 + 34 days) still exists
+	newestPath := filepath.Join(readingsDir, "readings-2026-07-05.csv")
+	if _, err := os.Stat(newestPath); err != nil {
+		t.Errorf("newest file should exist: %v", err)
+	}
+}
