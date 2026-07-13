@@ -33,6 +33,13 @@
             android:layout_height="wrap_content"
             android:text="@string/battery_optimization_button" />
 
+        <Button
+            android:id="@+id/exportButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="8dp"
+            android:text="@string/export_logs_button" />
+
     </LinearLayout>
 
     <LinearLayout

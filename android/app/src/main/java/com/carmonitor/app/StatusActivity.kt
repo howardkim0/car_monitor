@@ -14,9 +14,19 @@ import android.os.Process
 import android.provider.Settings
 import android.widget.Button
 import android.widget.TextView
+import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.VisibleForTesting
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.FileProvider
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
+import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 /**
  * The single status screen DESIGN.md section 3 calls for: shows
@@ -29,10 +39,13 @@ class StatusActivity : AppCompatActivity(), ObdForegroundService.StatusListener 
     private lateinit var statusText: TextView
     private lateinit var readingsText: TextView
     private lateinit var batteryOptimizationButton: Button
+    private lateinit var exportButton: Button
     private lateinit var stopButton: Button
     private lateinit var quitButton: Button
 
     private var boundService: ObdForegroundService? = null
+
+    private val scope = CoroutineScope(Dispatchers.Main + Job())
 
     @VisibleForTesting
     internal var isBound = false
@@ -80,6 +93,8 @@ class StatusActivity : AppCompatActivity(), ObdForegroundService.StatusListener 
         readingsText = findViewById(R.id.readingsText)
         batteryOptimizationButton = findViewById(R.id.batteryOptimizationButton)
         batteryOptimizationButton.setOnClickListener { requestBatteryOptimizationExemption() }
+        exportButton = findViewById(R.id.exportButton)
+        exportButton.setOnClickListener { exportLogs() }
         stopButton = findViewById(R.id.stopButton)
         stopButton.setOnClickListener { if (stoppedByUser) startScanning() else stopMonitoring() }
         quitButton = findViewById(R.id.quitButton)
@@ -230,6 +245,52 @@ class StatusActivity : AppCompatActivity(), ObdForegroundService.StatusListener 
             Uri.parse("package:$packageName")
         )
         startActivity(intent)
+    }
+
+    private fun exportLogs() {
+        scope.launch(Dispatchers.IO) {
+            try {
+                val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
+                val readingsDir = File(filesDir, "readings")
+                val appLogFile = File(filesDir, "app.log")
+                val outputZip = File(cacheDir, "car_monitor_logs_$timestamp.zip")
+
+                LogExporter.buildZip(readingsDir, appLogFile, outputZip)
+
+                val uri = FileProvider.getUriForFile(
+                    this@StatusActivity,
+                    "${packageName}.fileprovider",
+                    outputZip
+                )
+
+                runOnUiThread {
+                    try {
+                        val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                            type = "application/zip"
+                            putExtra(Intent.EXTRA_STREAM, uri)
+                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        }
+                        startActivity(Intent.createChooser(shareIntent, getString(R.string.export_logs_chooser_title)))
+                    } catch (e: Exception) {
+                        Mobile.logError("Failed to show share sheet: $e")
+                        Toast.makeText(
+                            this@StatusActivity,
+                            getString(R.string.export_logs_failed),
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    }
+                }
+            } catch (e: Exception) {
+                Mobile.logError("Log export failed: $e")
+                runOnUiThread {
+                    Toast.makeText(
+                        this@StatusActivity,
+                        getString(R.string.export_logs_failed),
+                        Toast.LENGTH_SHORT
+                    ).show()
+                }
+            }
+        }
     }
 
     companion object {

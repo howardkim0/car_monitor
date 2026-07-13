@@ -57,7 +57,10 @@ The practical split, and what this doc assumes:
   a single status Activity (connected/disconnected, last readings).
 
 Go stays the place where all the interesting logic and all the tests live;
-Kotlin is intentionally kept dumb (I/O plumbing + Android ceremony).
+Kotlin is intentionally kept dumb (I/O plumbing + Android ceremony). For example,
+`LogExporter` (manual log export via the share sheet) is deliberately Kotlin-only
+because zipping and Android intent-based sharing are framework plumbing, not
+business logic requiring a Go round-trip.
 
 ## 4. Architecture
 
