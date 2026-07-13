@@ -77,4 +77,23 @@ class StatusActivityTest {
 
         assertFalse(activity.isBound)
     }
+
+    @Test
+    fun `destroying the activity cancels the export coroutine scope`() {
+        // Regression test: exportLogs() runs on a manually-created
+        // CoroutineScope that touches the UI (Toast, startActivity) when
+        // it completes. Before this fix, that scope was never cancelled,
+        // so an export still in flight when the Activity is destroyed
+        // (e.g. the user backs out mid-export) could reach into a dead
+        // Activity. onDestroy() must cancel it.
+        // Not added to `controllers` — destroyed directly below, and
+        // tearDown() double-destroying it crashes Robolectric's fragment
+        // teardown with an unrelated NPE.
+        val controller = Robolectric.buildActivity(StatusActivity::class.java).create().start()
+        val activity = controller.get()
+
+        controller.destroy()
+
+        assertFalse("expected the export coroutine scope to be cancelled on destroy", activity.exportScopeIsActive())
+    }
 }

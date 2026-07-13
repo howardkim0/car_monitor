@@ -22,10 +22,13 @@ import androidx.core.content.FileProvider
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
+import mobile.Mobile
 import java.util.Locale
 
 /**
@@ -46,6 +49,9 @@ class StatusActivity : AppCompatActivity(), ObdForegroundService.StatusListener 
     private var boundService: ObdForegroundService? = null
 
     private val scope = CoroutineScope(Dispatchers.Main + Job())
+
+    @VisibleForTesting
+    internal fun exportScopeIsActive(): Boolean = scope.isActive
 
     @VisibleForTesting
     internal var isBound = false
@@ -125,6 +131,15 @@ class StatusActivity : AppCompatActivity(), ObdForegroundService.StatusListener 
         }
         boundService = null
         super.onStop()
+    }
+
+    override fun onDestroy() {
+        // exportLogs() launches on this scope and touches the UI
+        // (Toast, startActivity) when it finishes — cancel it here so a
+        // still-running export doesn't reach into a destroyed Activity
+        // (e.g. after the user backs out mid-export).
+        scope.cancel()
+        super.onDestroy()
     }
 
     override fun onStateChanged(state: ObdForegroundService.ConnectionState) {
