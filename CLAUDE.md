@@ -1,122 +1,80 @@
 # Instructions for Claude Code in this repo
 
-## Read the design doc first, every time
+## Read DESIGN.md first, every time
 
-Before making any change in this repo, read `DESIGN.md` in full. It defines
-the architecture (Go core in `go/`, thin Kotlin/Android shell in `android/`),
-the extensibility points for Bluetooth devices (`internal/device`) and
-vehicle profiles (`internal/vehicle`), and the reasoning behind them. If a
-change needs to diverge from what's there, update `DESIGN.md` in the same
-change rather than letting the doc and the code drift apart.
+Before making any change, read `DESIGN.md` in full — it defines the
+architecture (Go core in `go/`, thin Kotlin shell in `android/`) and the
+`internal/device`/`internal/vehicle` extensibility points. Update it in
+the same change if code diverges from what it says.
 
-## DESIGN.md describes the app, not the work session that changed it
+## DESIGN.md is timeless
 
-`DESIGN.md` documents the app as it exists now, for a reader with no
-knowledge of how it got there — it is not a changelog or a narration of
-any particular working session, PR, or round of edits. Never write
-phrases like "this session," "this round of changes," "just added,"
-"in this PR," or "earlier today" into it; describe behavior and
-decisions in the present tense as ongoing facts about the app (e.g. "a
-prune pass caps reading logs at 30 files" and "regression tests were
-backfilled for bugs found during development," not "this session's
-prune pass" or "bugs fixed this session"). If a decision's *history* is
-worth recording (why something was built a particular way, what was
-tried and rejected), say so as durable reasoning tied to the decision
-itself, not tied to when a particular agent or session happened to make
-the edit — that context belongs in a commit message or a `docs/plan-*.md`
-file instead, per the planning-docs convention below. Apply this
-retroactively when you touch a section that already has session-relative
-language, even if fixing it wasn't the point of the change.
+It describes the app as it exists now, not a changelog of any session,
+PR, or round of edits — avoid phrasing like "this session" or "just
+added." Use present tense for durable facts (e.g. "a prune pass caps
+reading logs at 30 files"). History worth keeping goes in commit
+messages or `docs/plan-*.md`, not DESIGN.md. Fix drifted language
+wherever you touch a section, even if that wasn't the point of the change.
 
-## Planning docs are saved to docs/
+## Planning docs go in docs/
 
-When a non-trivial task goes through plan mode, save the resulting plan
-into `docs/` (named `plan-<topic>.md`) once it's approved — not just left
-in the ephemeral plan-mode location. Include research gathered while
-planning (web lookups, spec cross-references, decisions made and why),
-not only the final task breakdown — that reasoning is what's actually
-hard to reconstruct later, and code/DESIGN.md diffs alone don't carry it.
-If the task originated from a spec doc already in `docs/` (e.g.
-`docs/prompt-<topic>.md`), the plan is its companion, not a replacement —
-both stay.
+After plan mode approves a non-trivial task, save the plan to
+`docs/plan-<topic>.md` — include the reasoning (research, alternatives
+considered), not just the task breakdown, since that's what's hardest to
+reconstruct later. If it originated from `docs/prompt-<topic>.md`, the
+plan is a companion, not a replacement.
 
-## Delegate implementation to Haiku agents for token efficiency
+## Delegate well-specified work to Haiku
 
-Where a change is well-specified (the file(s), the exact diff, and the
-intent are already clear — e.g. from a plan, a reviewed spec, or explicit
-instructions), delegate the actual implementation to a Haiku-model
-subagent rather than writing it inline. Reserve Sonnet/Opus-level
-reasoning for planning, architecture decisions, two-persona review, and
-ambiguous judgment calls; hand mechanical implementation to Haiku once
-the "what" and "how" are already decided. Batch independent Haiku tasks
-in parallel rather than running them serially. This keeps token spend
-proportional to the actual difficulty of the decision being made, not the
-size of the diff.
+If the file(s), diff, and intent are already clear — from a plan, spec,
+or explicit instruction — delegate implementation to a Haiku subagent
+instead of writing it inline. Reserve Sonnet/Opus for planning,
+architecture decisions, review, and judgment calls. Batch independent
+Haiku tasks in parallel.
 
-## DESIGN.md changes need an Architect pass first
+## DESIGN.md edits need an Architect pass first
 
-Any edit to `DESIGN.md` — however small — gets an explicit Architect-persona review before it's committed. Run it as an actual separate pass (or a dedicated quick subagent) rather than a mental check while writing the diff. Check if the change fits the `go/`/`android/` split and the extensibility boundaries in §5, and ensure the doc matches the code. Leverage `agy` commands (e.g. `agy grep`, `agy find`) or Antigravity's codebase tools for rapid, token-efficient context discovery.
+Any DESIGN.md edit, however small, gets an explicit Architect-persona
+review (a separate pass or subagent, not a mental check) before
+committing: does it fit the `go/`/`android/` split and §5's
+extensibility boundaries, and does the doc match the code?
 
 ## Two-persona review before every commit
 
-To minimize token usage and keep context size optimal, no code change is committed on a single pass. Perform a review from these two perspectives. For non-trivial changes, run these as separate passes or lightweight subagents (e.g. `self` or `research` subagents). Use `agy` codebase research tools (like `grep_search` or `view_file` with precise line ranges) inside these persona passes to quickly pull needed context without reading whole files:
+Review non-trivial code changes from two perspectives, as separate
+passes:
 
-1. **Architect** — Does this fit `DESIGN.md`'s architecture and boundaries? Check that new device/vehicle behavior goes through `device.Profile`/`vehicle.Profile` and lives in the correct package (`internal/obd2`, `internal/device`, `internal/vehicle`, `internal/storage`, `mobile`).
-2. **Senior Engineer** — Is the logic correct (formulas, framing, concurrency, error handling)? Are edge cases covered by unit tests? Is it idiomatic Go, free of dead code?
-
-## Token Efficiency Guidelines
-
-- **Targeted File Reading**: Never view entire files if you only need a specific section. Use `view_file` with `StartLine` and `EndLine`.
-- **Precise Search**: Prefer `grep_search` (with file globs) or `agy` CLI search commands to locate symbols/patterns instead of listing directories recursively or scanning files line by line.
-- **Short Command Output**: Run terminal commands with output limits (e.g. `git log -n 5`, `go test -v ./... -run TestSpecific`) to prevent flooding the context.
+1. **Architect** — fits `DESIGN.md`'s boundaries? New device/vehicle
+   behavior goes through `device.Profile`/`vehicle.Profile` and lives in
+   the right package (`internal/obd2`, `internal/device`,
+   `internal/vehicle`, `internal/storage`, `mobile`)?
+2. **Senior Engineer** — correct logic, concurrency, error handling?
+   Edge cases tested? Idiomatic, no dead code?
 
 ## Every caught bug gets a regression test
 
-Whenever a bug is caught and fixed — whether it surfaced during the
-three-persona review above, a pre-commit/CI failure, or a human noticing
-something wrong and flagging it — add a unit test that reproduces it (i.e.
-would have failed before the fix), not just the fix itself. This applies
-no matter who or what caught it; "a human found it" or "the fix is
-obviously correct" are not exemptions. For `go/`, follow the existing
-table-driven, one-file-per-source-file convention. The test is what keeps
-the bug fixed after the next refactor, not the fix alone.
+Whenever a bug is found and fixed — by the review above, CI, or a
+human — add a test that would have failed before the fix, not just the
+fix. No exceptions for "a human found it" or "the fix is obviously
+correct." Go tests: table-driven, one file per source file.
 
-## Tests and build are enforced, not optional
+## Tests and build are enforced
 
-`githooks/pre-commit` (wired up via `git config core.hooksPath githooks`,
-which `scripts/setup_ubuntu.sh` does automatically) runs `gofmt`, `go vet`,
-`go test ./...` (with the coverage gate below), and `go build ./...` for
-the `go/` module on every commit. Don't bypass it with `--no-verify` — fix
-the failure instead. Any new package under `go/` needs unit tests before
-it's committed, matching the existing packages' style (table-driven
-tests, one test file per source file).
+`githooks/pre-commit` runs `gofmt`, `go vet`, `go test ./...` (100%
+coverage gate), and `go build ./...` for `go/` on every commit. Don't
+bypass with `--no-verify` — fix the failure. New `go/` packages need
+tests in the same style before committing.
 
-## Coverage is enforced, not just measured
+## Coverage: 100% for go/, not android/
 
-`githooks/pre-commit` runs `go test -coverprofile=... ./...` and fails the
-commit if total statement coverage drops below `MIN_COVERAGE` (100%, set
-at the top of the script) — `go/` is small, pure business logic with no
-framework I/O to mock, so 100% is a real, meaningful bar, not a number
-inflated with contrived tests. A `.github/workflows/coverage.yml` re-runs
-the same check on push/PR as a backstop (a bypassed local hook, or a
-fresh clone without hooks configured) and emails on any regression. If a
-change legitimately needs the floor lowered, change `MIN_COVERAGE` in
-`githooks/pre-commit` in the same commit and say why, rather than working
-around a failing gate.
+The pre-commit hook fails below `MIN_COVERAGE` (100%, top of the
+script) — `go/` is pure logic with no framework I/O to mock, so this is
+a real bar. `.github/workflows/coverage.yml` backstops it on push/PR.
+Lowering the floor requires changing `MIN_COVERAGE` in the same commit
+and saying why.
 
-The 100% gate is `go/`-only. `android/` has its own test setup now (JUnit +
-Robolectric + MockK under `android/app/src/test`, run via
-`./gradlew testDebugUnitTest`; Kover reports coverage via
-`./gradlew koverHtmlReportDebug`) — see DESIGN.md section 13 for why it's
-deliberately not held to the same 100% number: closing five small gaps in
-pure Go functions and exhaustively simulating every Bluetooth/Service
-framework interaction through Robolectric/MockK are not comparable-sized
-tasks. `android/` tests target real regressions (bugs actually found), not
-a percentage.
-
-Full Android/APK compilation (`gomobile bind` + `gradlew assembleDebug`)
-requires the Android SDK/NDK from `scripts/setup_ubuntu.sh` and is
-deliberately not part of the pre-commit hook (too slow, and the toolchain
-isn't guaranteed to be present on every machine). Run it manually per
-`DESIGN.md` section 11 whenever a change touches the Android shell or the
-`mobile` package's exported surface.
+`android/` (JUnit + Robolectric + MockK, `./gradlew testDebugUnitTest`,
+Kover for coverage) isn't held to 100% — see DESIGN.md §13 — and targets
+real regressions, not a percentage. Full Android/APK compilation is
+deliberately not part of the pre-commit hook; run it manually per
+DESIGN.md §11 when touching `android/` or `mobile`'s exported surface.
