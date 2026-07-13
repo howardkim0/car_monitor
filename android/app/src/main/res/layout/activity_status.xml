@@ -21,57 +21,41 @@
         android:textSize="16sp"
         android:fontFamily="monospace" />
 
-    <LinearLayout
+    <Button
+        android:id="@+id/batteryOptimizationButton"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:orientation="horizontal"
-        android:gravity="end">
+        android:text="@string/battery_optimization_button" />
 
-        <Button
-            android:id="@+id/batteryOptimizationButton"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="@string/battery_optimization_button" />
-
-        <Button
-            android:id="@+id/exportButton"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginStart="8dp"
-            android:text="@string/export_logs_button" />
-
-        <Button
-            android:id="@+id/copySshKeyButton"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginStart="8dp"
-            android:enabled="false"
-            android:text="@string/copy_ssh_key_button" />
-
-    </LinearLayout>
-
-    <LinearLayout
+    <Button
+        android:id="@+id/exportButton"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginTop="8dp"
-        android:orientation="horizontal"
-        android:gravity="end">
+        android:text="@string/export_logs_button" />
 
-        <Button
-            android:id="@+id/stopButton"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:backgroundTint="#B3261E"
-            android:text="@string/stop_button" />
+    <Button
+        android:id="@+id/copySshKeyButton"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:enabled="false"
+        android:text="@string/copy_ssh_key_button" />
 
-        <Button
-            android:id="@+id/quitButton"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginStart="8dp"
-            android:backgroundTint="#3A3A3A"
-            android:text="@string/quit_app_button" />
+    <Button
+        android:id="@+id/stopButton"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:backgroundTint="#B3261E"
+        android:text="@string/stop_button" />
 
-    </LinearLayout>
+    <Button
+        android:id="@+id/quitButton"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:backgroundTint="#3A3A3A"
+        android:text="@string/quit_app_button" />
 
 </LinearLayout>

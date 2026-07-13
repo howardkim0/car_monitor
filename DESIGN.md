@@ -54,7 +54,13 @@ The practical split, and what this doc assumes:
   possible — a `Foreground Service` that opens the classic Bluetooth socket,
   streams raw bytes into the Go library, and reads processed results back
   out. Also owns permissions, the persistent notification, boot-start, and
-  a single status Activity (connected/disconnected, last readings).
+  a single status Activity (connected/disconnected, last readings). Its
+  action buttons (battery-optimization exemption, export logs, copy SSH
+  public key, stop/start scanning, quit) are a single full-width, vertically
+  stacked column, not a grid — label lengths vary enough (a two-line "Copy
+  SSH Public Key" next to a one-line "Quit App") that a multi-column layout
+  doesn't stay aligned, exactly the misalignment the previous row-based
+  layout had in practice.
 
 Go stays the place where all the interesting logic and all the tests live;
 Kotlin is intentionally kept dumb (I/O plumbing + Android ceremony). For example,
