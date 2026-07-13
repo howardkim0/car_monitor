@@ -581,11 +581,19 @@ as a legitimate update to this app, so it's kept out of the repo entirely
   (e.g. an interval per `vehicle.Profile`, or per-`PID`) would let a
   future vehicle with different sampling needs express that without
   touching Kotlin.
-- `COMMAND_INTERVAL_MS` was reduced from 100ms to 50ms alongside the PID
-  expansion (32 PIDs now vs. the original 4, so a full cycle at the old
-  interval would run several seconds) — unverified against real ELM327
-  hardware, since this dev environment has no Bluetooth device access;
-  revisit if real-world testing shows it's too aggressive.
+- `COMMAND_INTERVAL_MS` was raised from 50ms to **200ms** to be gentler on
+  the ELM327 adapter. At 200ms/command × 32 PIDs + 250ms
+  `POLL_CYCLE_MS`, one full cycle takes ~6.65s. Diagnostic logs now land
+  in the persistent app log (via `Mobile.logDebug`) to verify this against
+  real hardware: `writeLoop` logs active constants at session start and
+  then cycle count / elapsed time / actual cycle duration every ~9 cycles
+  (~1 min); `readLoop` logs bytes received on the first read and every
+  100 reads; Go's `obd2.Session` logs each discovery range as it resolves
+  (PID count, remaining ranges) and the final discovery outcome
+  (completed-by-response vs. timeout, elapsed time, total commands).
+  Read these from `adb shell cat /data/data/com.carmonitor.app/files/app.log`
+  after a short drive to tune the interval up or down based on real ELM327
+  behavior.
 - `mobile.Session.CommandCount()`/`CommandAt(i)` are two separate JNI
   calls, not one atomic snapshot. Now that `Commands()` can change
   mid-flight (discovery resolving between the two calls), Kotlin's

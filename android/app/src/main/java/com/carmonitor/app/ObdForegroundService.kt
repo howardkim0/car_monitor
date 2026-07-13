@@ -405,16 +405,38 @@ class ObdForegroundService : Service() {
     private suspend fun readLoop(socket: BluetoothSocket, session: Session) {
         val input = socket.inputStream
         val buffer = ByteArray(1024)
+        var readCount = 0L
         while (currentCoroutineContext().isActive) {
             val read = input.read(buffer) // blocking read, safe on Dispatchers.IO
             if (read < 0) throw IOException("Bluetooth input stream closed")
             session.feed(buffer.copyOf(read))
+            readCount++
+            // Log the very first read (confirms the socket is delivering
+            // data end-to-end) and then every READ_DIAGNOSTIC_EVERY_N reads,
+            // noting bytes received so we can gauge throughput vs. command
+            // cadence on real hardware.
+            if (readCount == 1L || readCount % READ_DIAGNOSTIC_EVERY_N == 0L) {
+                val msg = "readLoop read=$readCount bytes=$read"
+                Log.d(TAG, msg)
+                Mobile.logDebug(msg)
+            }
         }
     }
 
     private suspend fun writeLoop(socket: BluetoothSocket, session: Session) {
         val output = socket.outputStream
+        var cycleCount = 0L
+        val loopStartMs = SystemClock.elapsedRealtime()
+        // Log once at the start of each session so the app log shows the
+        // active polling constants — lets us verify DESIGN.md §12's
+        // COMMAND_INTERVAL_MS/POLL_CYCLE_MS assumptions against real hardware
+        // without needing to rebuild.
+        val startMsg = "writeLoop starting: COMMAND_INTERVAL_MS=$COMMAND_INTERVAL_MS " +
+            "POLL_CYCLE_MS=$POLL_CYCLE_MS commandCount=${session.commandCount()}"
+        Log.d(TAG, startMsg)
+        Mobile.logDebug(startMsg)
         while (currentCoroutineContext().isActive) {
+            val cycleStart = SystemClock.elapsedRealtime()
             val commandCount = session.commandCount()
             for (i in 0L until commandCount) {
                 val command = session.commandAt(i)
@@ -424,6 +446,20 @@ class ObdForegroundService : Service() {
                 delay(COMMAND_INTERVAL_MS)
             }
             delay(POLL_CYCLE_MS)
+            cycleCount++
+            // Log every POLL_DIAGNOSTIC_EVERY_N_CYCLES cycles so we get
+            // real-hardware data on: actual cycle cadence vs. the constants
+            // above, how many commands are being sent (may be fewer after
+            // discovery filters PIDs), and whether cycles are running longer
+            // than expected (which would suggest the ELM327 is slowing us).
+            if (cycleCount % POLL_DIAGNOSTIC_EVERY_N_CYCLES == 0L) {
+                val elapsedSec = (SystemClock.elapsedRealtime() - loopStartMs) / 1000.0
+                val cycleDurationMs = SystemClock.elapsedRealtime() - cycleStart
+                val msg = "writeLoop cycle=$cycleCount elapsed=%.1fs commandCount=$commandCount " +
+                    "cycleDurationMs=${cycleDurationMs}ms"
+                Log.d(TAG, msg.format(elapsedSec))
+                Mobile.logDebug(msg.format(elapsedSec))
+            }
         }
     }
 
@@ -525,13 +561,14 @@ class ObdForegroundService : Service() {
         private val SPP_UUID: UUID = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
         private const val INITIAL_BACKOFF_MS = 1_000L
         private const val MAX_BACKOFF_MS = 30_000L
-        // 50ms, not the original 100ms: with up to 32 PIDs now in the
-        // profile (vs. the original 4 — see DESIGN.md section 5.2), a
-        // full cycle at 100ms/command would run ~2.8s+ before even
-        // reaching POLL_CYCLE_MS. Unverified against real ELM327
-        // hardware — no device access in this sandbox, same caveat as
-        // every other Bluetooth-dependent value in this file.
-        private const val COMMAND_INTERVAL_MS = 50L
+        // 200ms, not the original 50ms (which itself was reduced from 100ms
+        // alongside PID expansion — see DESIGN.md section 5.2 and §12).
+        // 200ms is gentler on the ELM327 adapter while still cycling all 32
+        // PIDs in ~7s (200ms * 32 + POLL_CYCLE_MS). Unverified against real
+        // hardware — the diagnostic logs added to writeLoop/readLoop (see
+        // above) will show actual cycle duration on a real device, letting
+        // us tune this value based on real ELM327 behavior.
+        private const val COMMAND_INTERVAL_MS = 200L
         private const val POLL_CYCLE_MS = 250L
         // Deliberately much coarser than POLL_CYCLE_MS: each check re-reads
         // and re-parses the whole day's CSV log from disk (see
@@ -542,6 +579,14 @@ class ObdForegroundService : Service() {
         private const val ANOMALY_CHECK_INTERVAL_MS = 60_000L
         private const val PERMISSION_POLL_INTERVAL_MS = 3_000L
         private const val NO_CONNECTION_TIMEOUT_MS = 5 * 60 * 1_000L
+        // Emit a writeLoop timing log every N cycles; at 200ms/command and
+        // 32 commands + 250ms POLL_CYCLE_MS overhead, one cycle is ~6.65s,
+        // so N=9 gives a diagnostic line approximately every minute.
+        private const val POLL_DIAGNOSTIC_EVERY_N_CYCLES = 9L
+        // Emit a readLoop bytes-received log every N reads. ELM327 responses
+        // are short (< 20 bytes each), so this is roughly every ~100 command
+        // responses — a few minutes of real driving at 200ms/command.
+        private const val READ_DIAGNOSTIC_EVERY_N = 100L
         @VisibleForTesting
         internal const val ACTION_STOP = "com.carmonitor.app.action.STOP"
         @VisibleForTesting

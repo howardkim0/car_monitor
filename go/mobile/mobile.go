@@ -73,14 +73,25 @@ func newSessionWithStore(store storage.Store, readingsDir string, listener Readi
 		anomalyListener: anomalyListener,
 		lastLevel:       make(map[string]trend.IssueLevel),
 	}
-	s.inner = obd2.NewSession(vehicle.Default(), func(r obd2.Reading) {
+	// firstReading tracks whether we've logged the "pipeline is alive"
+	// diagnostic for this session — reset on every Bluetooth reconnect
+	// (a new Session is created each time) so the log appears once per
+	// connection, not once per app lifetime. Answers DESIGN.md §12's
+	// question about real-hardware round-trip timing.
+	var firstReading bool
+	s.inner = obd2.NewSessionWithLogger(vehicle.Default(), func(r obd2.Reading) {
+		if !firstReading {
+			firstReading = true
+			LogDebug(fmt.Sprintf("obd2: first reading received — pipeline alive: pid=0x%02X name=%q value=%.2f %s",
+				r.PID, r.Name, r.Value, r.Unit))
+		}
 		if err := s.store.Append(r); err != nil {
 			LogError(fmt.Sprintf("append reading (pid 0x%02X): %v", r.PID, err))
 		}
 		if listener != nil {
 			listener.OnReading(int(r.PID), r.Name, r.Unit, r.Value, r.Timestamp.UnixMilli())
 		}
-	})
+	}, func(format string, args ...any) { LogDebug(fmt.Sprintf(format, args...)) })
 	return s
 }
 

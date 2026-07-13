@@ -17,6 +17,11 @@ import (
 	"github.com/howardkim0/car_monitor/go/internal/vehicle"
 )
 
+// logfFunc is the type of the optional diagnostic logger injected into
+// Session. Matches fmt.Sprintf's signature so callers can pass any
+// printf-style function (e.g. applog.Logger.Debugf).
+type logfFunc func(format string, args ...any)
+
 // terminator is the line ending ELM327 uses in both directions.
 const terminator = '\r'
 
@@ -60,6 +65,14 @@ type Session struct {
 	onReading func(Reading)
 	pending   []byte
 
+	// logf is an optional diagnostic logger — nil by default so
+	// NewSession callers (tests included) are unaffected. Set via
+	// NewSessionWithLogger when the caller wants discovery/polling
+	// diagnostics (e.g. mobile.go wires this to LogDebug so they land
+	// in the persistent app log for real-hardware verification — see
+	// DESIGN.md section 12).
+	logf logfFunc
+
 	mu               sync.Mutex
 	discoveryStart   time.Time
 	unresolvedRanges map[byte]bool // discovery-query PID -> still awaiting a response
@@ -71,13 +84,44 @@ type Session struct {
 // invoking onReading for every successfully decoded line. onReading may be
 // nil if the caller only cares about Commands().
 func NewSession(profile vehicle.Profile, onReading func(Reading)) *Session {
-	return &Session{
+	return NewSessionWithLogger(profile, onReading, nil)
+}
+
+// NewSessionWithLogger is NewSession with an optional diagnostic logger.
+// logf (which may be nil) is called with printf-style arguments at key
+// discovery/polling lifecycle events — starting discovery, each range
+// resolving, and the final transition to the per-PID command list. This
+// is the hook mobile.go uses to route those messages into the persistent
+// app log for real-hardware ELM327 verification (DESIGN.md section 12).
+func NewSessionWithLogger(profile vehicle.Profile, onReading func(Reading), logf logfFunc) *Session {
+	s := &Session{
 		profile:          profile,
 		onReading:        onReading,
+		logf:             logf,
 		discoveryStart:   time.Now(),
 		unresolvedRanges: discoveryRanges(profile),
 		supported:        make(map[byte]bool),
 	}
+	if logf != nil {
+		logf("obd2: discovery starting: %d ranges to resolve (%v)",
+			len(s.unresolvedRanges), discoveryRangeList(s.unresolvedRanges))
+	}
+	return s
+}
+
+// discoveryRangeList returns a sorted slice of range base values for
+// logging — makes the log line deterministic instead of map-iteration-order.
+func discoveryRangeList(ranges map[byte]bool) []string {
+	bases := make([]byte, 0, len(ranges))
+	for b := range ranges {
+		bases = append(bases, b)
+	}
+	sort.Slice(bases, func(i, j int) bool { return bases[i] < bases[j] })
+	strs := make([]string, len(bases))
+	for i, b := range bases {
+		strs[i] = fmt.Sprintf("0x%02X", b)
+	}
+	return strs
 }
 
 // discoveryRanges returns the "PIDs supported" query PIDs (0x00, 0x20,
@@ -126,6 +170,7 @@ func (s *Session) Commands() []string {
 	// always-request-everything behavior instead of going silent if
 	// discovery itself fails for some reason), then compute and cache
 	// the real command list.
+	timedOutRanges := len(s.unresolvedRanges)
 	for base := range s.unresolvedRanges {
 		// int, not byte, for the same overflow reason as discoveryRanges:
 		// base+0x20 wraps for base == 0xE0.
@@ -139,6 +184,20 @@ func (s *Session) Commands() []string {
 	s.unresolvedRanges = nil
 
 	s.commands = buildCommands(s.profile, s.supported)
+	if s.logf != nil {
+		if timedOutRanges > 0 {
+			// Some ranges never got a bitmask response — fell back to
+			// assuming all PIDs in those ranges are supported.
+			s.logf("obd2: discovery timed out after %.1fs with %d unresolved range(s); "+
+				"falling back to full profile (%d commands)",
+				time.Since(s.discoveryStart).Seconds(), timedOutRanges, len(s.commands))
+		} else {
+			s.logf("obd2: discovery complete via responses in %.1fs; "+
+				"%d/%d profile PIDs confirmed supported (%d commands)",
+				time.Since(s.discoveryStart).Seconds(),
+				len(s.supported), len(s.profile.PIDs), len(s.commands))
+		}
+	}
 	return s.commands
 }
 
@@ -239,6 +298,10 @@ func (s *Session) tryHandleDiscoveryResponse(line string) bool {
 	}
 	delete(s.unresolvedRanges, base)
 	s.commands = nil // force Commands() to recompute now that a range resolved
+	if s.logf != nil {
+		s.logf("obd2: discovery range 0x%02X resolved: %d PIDs marked supported so far; %d range(s) still pending",
+			base, len(s.supported), len(s.unresolvedRanges))
+	}
 	return true
 }
 

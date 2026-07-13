@@ -346,3 +346,110 @@ func TestFeedMultipleReadingsInOneCall(t *testing.T) {
 		t.Errorf("speed reading.Value = %v, want 80", (*readings)[1].Value)
 	}
 }
+
+// TestNewSessionWithLoggerLogsDiscoveryStart verifies that NewSessionWithLogger
+// invokes the provided logf at construction time (the "discovery starting" line)
+// and that discoveryRangeList is exercised (it formats the list of ranges).
+func TestNewSessionWithLoggerLogsDiscoveryStart(t *testing.T) {
+	var logged []string
+	logf := func(format string, args ...any) {
+		logged = append(logged, fmt.Sprintf(format, args...))
+	}
+
+	NewSessionWithLogger(vehicle.Default(), nil, logf)
+
+	if len(logged) == 0 {
+		t.Fatal("expected at least one log line from NewSessionWithLogger, got none")
+	}
+	// The first message must mention "discovery starting" so we know it's the
+	// right call site, not some incidental log from another path.
+	if !contains(logged[0], "discovery starting") {
+		t.Errorf("first log line = %q, want it to contain \"discovery starting\"", logged[0])
+	}
+}
+
+// TestCommandsLogsDiscoveryCompleteViaResponses verifies that Commands() emits
+// a log line (via logf) when all discovery ranges are resolved by ECU responses.
+func TestCommandsLogsDiscoveryCompleteViaResponses(t *testing.T) {
+	var logged []string
+	logf := func(format string, args ...any) {
+		logged = append(logged, fmt.Sprintf(format, args...))
+	}
+	s := NewSessionWithLogger(vehicle.Default(), nil, logf)
+
+	// Resolve every range with an empty bitmask (no PIDs supported is fine
+	// for this test — we just need all ranges to report back).
+	s.Feed([]byte(discoveryResponseLine(0x00)))
+	s.Feed([]byte(discoveryResponseLine(0x20)))
+	s.Feed([]byte(discoveryResponseLine(0x40)))
+
+	// Trigger the transition — Commands() is where the log fires.
+	logged = nil // clear start log; only care about the completion message
+	s.Commands()
+
+	if !anyContains(logged, "discovery complete via responses") {
+		t.Errorf("expected a \"discovery complete via responses\" log line after all ranges resolved; got %v", logged)
+	}
+}
+
+// TestCommandsLogsDiscoveryTimeout verifies that Commands() emits a log line
+// when discovery times out before all ranges receive a response.
+func TestCommandsLogsDiscoveryTimeout(t *testing.T) {
+	original := discoveryTimeout
+	discoveryTimeout = 1 * time.Millisecond
+	defer func() { discoveryTimeout = original }()
+
+	var logged []string
+	logf := func(format string, args ...any) {
+		logged = append(logged, fmt.Sprintf(format, args...))
+	}
+	s := NewSessionWithLogger(vehicle.Default(), nil, logf)
+	time.Sleep(5 * time.Millisecond) // let the timeout elapse
+
+	logged = nil // clear start log
+	s.Commands()
+
+	if !anyContains(logged, "discovery timed out") {
+		t.Errorf("expected a \"discovery timed out\" log line; got %v", logged)
+	}
+}
+
+// TestTryHandleDiscoveryResponseLogsRangeResolved verifies that the per-range
+// log fires inside tryHandleDiscoveryResponse when a discovery range resolves.
+func TestTryHandleDiscoveryResponseLogsRangeResolved(t *testing.T) {
+	var logged []string
+	logf := func(format string, args ...any) {
+		logged = append(logged, fmt.Sprintf(format, args...))
+	}
+	s := NewSessionWithLogger(vehicle.Default(), nil, logf)
+
+	logged = nil // clear the start-of-discovery log
+	s.Feed([]byte(discoveryResponseLine(0x00, 0x0C)))
+
+	if !anyContains(logged, "range 0x00 resolved") {
+		t.Errorf("expected a \"range 0x00 resolved\" log line after feeding a discovery response; got %v", logged)
+	}
+}
+
+// contains reports whether sub is a substring of s.
+func contains(s, sub string) bool {
+	return len(s) >= len(sub) && (s == sub || len(sub) == 0 ||
+		func() bool {
+			for i := 0; i+len(sub) <= len(s); i++ {
+				if s[i:i+len(sub)] == sub {
+					return true
+				}
+			}
+			return false
+		}())
+}
+
+// anyContains reports whether any string in lines contains sub.
+func anyContains(lines []string, sub string) bool {
+	for _, l := range lines {
+		if contains(l, sub) {
+			return true
+		}
+	}
+	return false
+}
