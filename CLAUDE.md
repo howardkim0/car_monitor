@@ -9,6 +9,25 @@ vehicle profiles (`internal/vehicle`), and the reasoning behind them. If a
 change needs to diverge from what's there, update `DESIGN.md` in the same
 change rather than letting the doc and the code drift apart.
 
+## DESIGN.md describes the app, not the work session that changed it
+
+`DESIGN.md` documents the app as it exists now, for a reader with no
+knowledge of how it got there — it is not a changelog or a narration of
+any particular working session, PR, or round of edits. Never write
+phrases like "this session," "this round of changes," "just added,"
+"in this PR," or "earlier today" into it; describe behavior and
+decisions in the present tense as ongoing facts about the app (e.g. "a
+prune pass caps reading logs at 30 files" and "regression tests were
+backfilled for bugs found during development," not "this session's
+prune pass" or "bugs fixed this session"). If a decision's *history* is
+worth recording (why something was built a particular way, what was
+tried and rejected), say so as durable reasoning tied to the decision
+itself, not tied to when a particular agent or session happened to make
+the edit — that context belongs in a commit message or a `docs/plan-*.md`
+file instead, per the planning-docs convention below. Apply this
+retroactively when you touch a section that already has session-relative
+language, even if fixing it wasn't the point of the change.
+
 ## Planning docs are saved to docs/
 
 When a non-trivial task goes through plan mode, save the resulting plan

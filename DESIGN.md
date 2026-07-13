@@ -71,42 +71,48 @@ business logic requiring a Go round-trip.
 ## 4. Architecture
 
 ```
-┌─────────────────────────────── Android process ───────────────────────────────┐
-│                                                                                  │
-│  ┌───────────────┐        ┌────────────────────────────┐                       │
-│  │ StatusActivity │◄──────►│  ObdForegroundService (Kotlin) │                   │
-│  └───────────────┘        │  - BluetoothSocket (RFCOMM)     │                   │
-│                            │  - persistent notification      │                  │
-│                            │  - restarts on connection loss   │                 │
-│                            └───────────────┬────────────────┘                  │
-│                                             │ byte[] in / out (JNI, via gomobile)│
-│                                             ▼                                   │
-│                            ┌────────────────────────────────┐                   │
-│                            │   mobile.aar  (Go, gomobile)    │                  │
-│                            │  ┌───────────────────────────┐  │                  │
-│                            │  │ internal/obd2  (ELM327 +   │  │                  │
-│                            │  │   PID request/response)    │  │                  │
-│                            │  ├───────────────────────────┤  │                  │
-│                            │  │ internal/device  (registry │  │                  │
-│                            │  │   of known BT devices)     │  │                  │
-│                            │  ├───────────────────────────┤  │                  │
-│                            │  │ internal/vehicle (registry │  │                  │
-│                            │  │   of known cars / PID maps)│  │                  │
-│                            │  ├───────────────────────────┤  │                  │
-│                            │  │ internal/storage (CSV,     │  │                  │
-│                            │  │   UTC day-rotated readings)│  │                  │
-│                            │  ├───────────────────────────┤  │                  │
-│                            │  │ internal/applog (size-     │  │                  │
-│                            │  │   capped app/error log)    │  │                  │
-│                            │  ├───────────────────────────┤  │                  │
-│                            │  │ internal/trend (trend      │  │                  │
-│                            │  │   detection & anomalies)   │  │                  │
-│                            │  ├───────────────────────────┤  │                  │
-│                            │  │ internal/monitor (matches  │  │                  │
-│                            │  │   readings to trend checks)│  │                  │
-│                            │  └───────────────────────────┘  │                  │
-│                            └────────────────────────────────┘                   │
-└──────────────────────────────────────────────────────────────────────────────────┘
+┌──────────────────────── Android process ─────────────────────────┐
+│ ┌────────────────┐        ┌───────────────────────────────┐      │
+│ │ StatusActivity │◄──────►│ ObdForegroundService (Kotlin) │      │
+│ └────────────────┘        │ - BluetoothSocket (RFCOMM)    │      │
+│                           │ - persistent notification     │      │
+│                           │ - restarts on connection loss │      │
+│                           └───────────────────────────────┘      │
+│                                                                  │
+│                            │ byte[] in / out (JNI, via gomobile) │
+│                            ▼                                     │
+│                           ┌──────────────────────────────────┐   │
+│                           │ mobile.aar  (Go, gomobile)       │   │
+│                           │ ┌──────────────────────────────┐ │   │
+│                           │ │ internal/obd2  (ELM327 +     │ │   │
+│                           │ │   PID request/response)      │ │   │
+│                           │ ├──────────────────────────────┤ │   │
+│                           │ │ internal/device  (registry   │ │   │
+│                           │ │   of known BT devices)       │ │   │
+│                           │ ├──────────────────────────────┤ │   │
+│                           │ │ internal/vehicle (registry   │ │   │
+│                           │ │   of known cars / PID maps)  │ │   │
+│                           │ ├──────────────────────────────┤ │   │
+│                           │ │ internal/storage (CSV,       │ │   │
+│                           │ │   UTC day-rotated readings)  │ │   │
+│                           │ ├──────────────────────────────┤ │   │
+│                           │ │ internal/applog (size-       │ │   │
+│                           │ │   capped app/error log)      │ │   │
+│                           │ ├──────────────────────────────┤ │   │
+│                           │ │ internal/gitbackup (backs up │ │   │
+│                           │ │   logs to remote git repo)   │ │   │
+│                           │ ├──────────────────────────────┤ │   │
+│                           │ │ internal/sshkey (on-device   │ │   │
+│                           │ │   SSH keypair generation)    │ │   │
+│                           │ ├──────────────────────────────┤ │   │
+│                           │ │ internal/trend (trend        │ │   │
+│                           │ │   detection & anomalies)     │ │   │
+│                           │ ├──────────────────────────────┤ │   │
+│                           │ │ internal/monitor (matches    │ │   │
+│                           │ │   readings to trend checks)  │ │   │
+│                           │ └──────────────────────────────┘ │   │
+│                           └──────────────────────────────────┘   │
+└──────────────────────────────────────────────────────────────────┘
 ```
 
 ### Data flow
@@ -732,10 +738,10 @@ coverage (Kover) as a build artifact; it isn't gated. Revisit this once
 the Android test suite has enough real breadth that a numeric floor would
 mean something.
 
-**Regression tests, backfilled for bugs fixed this session** (per
-`CLAUDE.md`'s "every caught bug gets a regression test," applied
+**Regression tests, backfilled for specific bugs found during development**
+(per `CLAUDE.md`'s "every caught bug gets a regression test," applied
 retroactively where it still tests current behavior — not for behavior
-this same round of changes deleted, like the old auto-resume-on-reopen):
+later deliberately removed, like the old auto-resume-on-reopen):
 `connectSocket()` (extracted from `openConnection()`) closing the socket
 on a failed `connect()`; `onStartCommand()` refusing to launch a second
 concurrent `connectionLoop()`; `ACTION_STOP` actually cancelling the
