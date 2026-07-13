@@ -350,6 +350,23 @@ and a failure there surfaces as `UnsatisfiedLinkError`/
 whole foreground service over what is, at worst, a logging feature not
 working.
 
+### 6.3 SSH key for log backup
+
+On-device ed25519 keypair, generated once and persisted in
+`/data/data/<pkg>/files/ssh/id_ed25519` (private, mode 0o600) and
+`/data/data/<pkg>/files/ssh/id_ed25519.pub` (public, mode 0o644), used
+to authenticate log backups to a remote git repository (see section 12's
+git-backup plan). Idempotent: the public key is cached on first call to
+`mobile.SSHPublicKey()` and reused forever — regenerating would silently
+orphan any deploy key already registered on the upstream repository.
+
+Generated via `crypto/ed25519` + `golang.org/x/crypto/ssh` in the Go core
+(`internal/sshkey` package), not shelled out, since Android provides no
+`ssh-keygen` binary. Surfaced to the status screen via a "Copy SSH Public
+Key" button — disabled until the key loads from disk on a background
+coroutine — so the user can register it as a GitHub deploy key without
+needing `adb`.
+
 ## 7. Background execution model
 
 - **Foreground Service**, not `WorkManager` — this needs a persistent,
@@ -442,6 +459,7 @@ car_monitor/
 │   │   ├── vehicle/          # known vehicle profiles + PID maps
 │   │   ├── storage/          # CSV, UTC day-rotated reading log
 │   │   ├── applog/           # size-capped app/error log
+│   │   ├── sshkey/           # on-device SSH keypair generation and persistence
 │   │   ├── trend/            # trend detection and anomaly checking
 │   │   └── monitor/          # groups readings into per-metric series for trend
 │   └── mobile/               # gomobile bind entry point (exported API)
@@ -671,17 +689,6 @@ as a legitimate update to this app, so it's kept out of the repo entirely
   git plumbing in Kotlin; and section 8's permission list has no
   `INTERNET` entry today (the app is Bluetooth/local-storage-only), so
   this adds the app's first real network dependency.
-- An on-device SSH keypair for the git backup above: generate a
-  keypair for authenticating to `car_monitor_logs.git`, and add a "Copy
-  SSH public key" button to the main status screen so the user can
-  register it as a GitHub deploy key. There's no `ssh-keygen` binary on
-  Android either, so this is realistically `crypto/ed25519` in `go/`
-  (keeping key generation in Go per the same split as above) rather
-  than shelling out; the private key needs to live somewhere
-  better-protected than a plain file in app-private storage — Android
-  Keystore is the usual answer, though a hardware-backed key doesn't
-  export raw key material, which may or may not matter depending on
-  which git-over-ssh library ends up handling the actual push.
 
 ## 13. Testing
 

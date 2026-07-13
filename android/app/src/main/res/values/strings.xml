@@ -32,6 +32,9 @@
     <string name="export_logs_button">Export Logs</string>
     <string name="export_logs_chooser_title">Share logs via</string>
     <string name="export_logs_failed">Log export failed. Check app logs for details.</string>
+    <string name="copy_ssh_key_button">Copy SSH Public Key</string>
+    <string name="ssh_key_copied">SSH public key copied to clipboard</string>
+    <string name="ssh_key_not_available">SSH public key is not available</string>
     <string name="stop_button">Stop monitoring</string>
     <string name="start_scanning_button">Start Scanning</string>
     <string name="quit_app_button">Quit App</string>

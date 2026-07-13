@@ -40,6 +40,14 @@
             android:layout_marginStart="8dp"
             android:text="@string/export_logs_button" />
 
+        <Button
+            android:id="@+id/copySshKeyButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="8dp"
+            android:enabled="false"
+            android:text="@string/copy_ssh_key_button" />
+
     </LinearLayout>
 
     <LinearLayout

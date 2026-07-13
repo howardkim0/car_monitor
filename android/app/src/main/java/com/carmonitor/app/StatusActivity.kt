@@ -1,6 +1,7 @@
 package com.carmonitor.app
 
 import android.Manifest
+import android.content.ClipboardManager
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
@@ -43,12 +44,15 @@ class StatusActivity : AppCompatActivity(), ObdForegroundService.StatusListener 
     private lateinit var readingsText: TextView
     private lateinit var batteryOptimizationButton: Button
     private lateinit var exportButton: Button
+    private lateinit var copySshKeyButton: Button
     private lateinit var stopButton: Button
     private lateinit var quitButton: Button
 
     private var boundService: ObdForegroundService? = null
 
     private val scope = CoroutineScope(Dispatchers.Main + Job())
+
+    private var cachedSshPublicKey: String? = null
 
     @VisibleForTesting
     internal fun exportScopeIsActive(): Boolean = scope.isActive
@@ -101,10 +105,33 @@ class StatusActivity : AppCompatActivity(), ObdForegroundService.StatusListener 
         batteryOptimizationButton.setOnClickListener { requestBatteryOptimizationExemption() }
         exportButton = findViewById(R.id.exportButton)
         exportButton.setOnClickListener { exportLogs() }
+        copySshKeyButton = findViewById(R.id.copySshKeyButton)
+        copySshKeyButton.isEnabled = false
+        copySshKeyButton.setOnClickListener { copySshKeyToClipboard() }
         stopButton = findViewById(R.id.stopButton)
         stopButton.setOnClickListener { if (stoppedByUser) startScanning() else stopMonitoring() }
         quitButton = findViewById(R.id.quitButton)
         quitButton.setOnClickListener { quitApp() }
+
+        // Load SSH public key on IO thread
+        scope.launch(Dispatchers.IO) {
+            try {
+                val key = Mobile.sshPublicKey(filesDir.absolutePath)
+                cachedSshPublicKey = key
+                runOnUiThread {
+                    copySshKeyButton.isEnabled = true
+                }
+            } catch (e: Exception) {
+                Mobile.logError("Failed to load SSH public key: $e")
+                runOnUiThread {
+                    Toast.makeText(
+                        this@StatusActivity,
+                        getString(R.string.ssh_key_not_available),
+                        Toast.LENGTH_SHORT
+                    ).show()
+                }
+            }
+        }
 
         stoppedByUser = loadStoppedByUser()
         if (stoppedByUser) {
@@ -306,6 +333,28 @@ class StatusActivity : AppCompatActivity(), ObdForegroundService.StatusListener 
                 }
             }
         }
+    }
+
+    private fun copySshKeyToClipboard() {
+        val key = cachedSshPublicKey
+        if (key == null) {
+            Toast.makeText(
+                this,
+                getString(R.string.ssh_key_not_available),
+                Toast.LENGTH_SHORT
+            ).show()
+            return
+        }
+
+        val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        val clip = android.content.ClipData.newPlainText("SSH Public Key", key)
+        clipboard.setPrimaryClip(clip)
+
+        Toast.makeText(
+            this,
+            getString(R.string.ssh_key_copied),
+            Toast.LENGTH_SHORT
+        ).show()
     }
 
     companion object {
