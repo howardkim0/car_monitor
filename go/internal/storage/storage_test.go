@@ -311,3 +311,137 @@ func TestWriteErrorOnFieldLargerThanBufferedWriter(t *testing.T) {
 		t.Error("Append with a field larger than the buffered writer against a closed file should error, got nil")
 	}
 }
+
+func TestLoadReadingsReturnsNilWhenTodaysFileDoesNotExist(t *testing.T) {
+	dir := t.TempDir()
+
+	readings, err := LoadReadings(dir)
+	if err != nil {
+		t.Fatalf("LoadReadings: %v", err)
+	}
+	if readings != nil {
+		t.Errorf("LoadReadings with no file = %v, want nil", readings)
+	}
+}
+
+func TestLoadReadingsRoundTripsAppendedRows(t *testing.T) {
+	dir := t.TempDir()
+	store, err := OpenFileStore(dir)
+	if err != nil {
+		t.Fatalf("OpenFileStore: %v", err)
+	}
+
+	today := time.Now().UTC()
+	ts1 := time.Date(today.Year(), today.Month(), today.Day(), 10, 30, 0, 123000000, time.UTC)
+	ts2 := ts1.Add(1 * time.Second)
+	want := []obd2.Reading{
+		{PID: 0x0C, Name: "Engine RPM", Value: 1726, Unit: "rpm", Timestamp: ts1},
+		{PID: 0x05, Name: "Coolant Temperature", Value: 90.5, Unit: "C", Timestamp: ts2},
+	}
+	for _, r := range want {
+		if err := store.Append(r); err != nil {
+			t.Fatalf("Append(%+v): %v", r, err)
+		}
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	got, err := LoadReadings(dir)
+	if err != nil {
+		t.Fatalf("LoadReadings: %v", err)
+	}
+	if len(got) != len(want) {
+		t.Fatalf("LoadReadings returned %d readings, want %d: %+v", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i].PID != want[i].PID || got[i].Name != want[i].Name || got[i].Value != want[i].Value ||
+			got[i].Unit != want[i].Unit || !got[i].Timestamp.Equal(want[i].Timestamp) {
+			t.Errorf("reading %d = %+v, want %+v", i, got[i], want[i])
+		}
+	}
+}
+
+func TestLoadReadingsSkipsMalformedRowsButKeepsGoodOnes(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "readings-"+time.Now().UTC().Format(dateFormat)+".csv")
+
+	raw := "pid,name,value,unit,timestamp\n" +
+		"12,Engine RPM,1726,rpm,2026-07-12T10:30:00Z\n" + // good
+		"not-a-pid,Engine RPM,1726,rpm,2026-07-12T10:30:00Z\n" + // bad pid
+		"12,Engine RPM,not-a-number,rpm,2026-07-12T10:30:00Z\n" + // bad value
+		"12,Engine RPM,1726,rpm,not-a-timestamp\n" + // bad timestamp
+		"12,Engine RPM,1726,rpm\n" + // wrong column count
+		"13,Vehicle Speed,80,km/h,2026-07-12T10:30:01Z\n" // good
+	if err := os.WriteFile(path, []byte(raw), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	got, err := LoadReadings(dir)
+	if err != nil {
+		t.Fatalf("LoadReadings: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("got %d readings, want 2 (only the well-formed rows): %+v", len(got), got)
+	}
+	if got[0].PID != 0x0C || got[1].PID != 0x0D {
+		t.Errorf("got PIDs %#x, %#x, want 0x0C, 0x0D", got[0].PID, got[1].PID)
+	}
+}
+
+func TestLoadReadingsStopsAtTornFinalLine(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "readings-"+time.Now().UTC().Format(dateFormat)+".csv")
+
+	// An unterminated quote makes encoding/csv return a parse error on
+	// that line — simulating a write that got cut off mid-row by an
+	// unclean process kill, after the header and one good row.
+	raw := "pid,name,value,unit,timestamp\n" +
+		"12,Engine RPM,1726,rpm,2026-07-12T10:30:00Z\n" +
+		"13,\"Vehicle Speed,80,km/h,2026-07-12T10:30:01Z\n"
+	if err := os.WriteFile(path, []byte(raw), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	got, err := LoadReadings(dir)
+	if err != nil {
+		t.Fatalf("LoadReadings: %v", err)
+	}
+	if len(got) != 1 || got[0].PID != 0x0C {
+		t.Fatalf("got %+v, want just the one good row before the torn line", got)
+	}
+}
+
+func TestLoadReadingsErrorsWhenFileExistsButCannotBeRead(t *testing.T) {
+	dir := t.TempDir()
+	// A directory sitting at the exact path LoadReadings wants to open as
+	// a file makes os.Open succeed (opening a directory read-only doesn't
+	// fail on Unix) but the first Read() fail before the header is ever
+	// reached — the "error before skippedHeader" branch.
+	blockedPath := filepath.Join(dir, "readings-"+time.Now().UTC().Format(dateFormat)+".csv")
+	if err := os.Mkdir(blockedPath, 0o755); err != nil {
+		t.Fatalf("Mkdir: %v", err)
+	}
+
+	if _, err := LoadReadings(dir); err == nil {
+		t.Error("LoadReadings with a directory blocking today's file should error, got nil")
+	}
+}
+
+func TestLoadReadingsErrorsWhenFileCannotBeOpened(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "readings-"+time.Now().UTC().Format(dateFormat)+".csv")
+	if err := os.WriteFile(path, []byte("pid,name,value,unit,timestamp\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	// Remove read permission so os.Open itself fails with something other
+	// than ErrNotExist — the file genuinely exists.
+	if err := os.Chmod(path, 0o000); err != nil {
+		t.Fatalf("Chmod: %v", err)
+	}
+	defer os.Chmod(path, 0o644) // restore so t.TempDir() cleanup can remove it
+
+	if _, err := LoadReadings(dir); err == nil {
+		t.Error("LoadReadings against an unreadable file should error, got nil")
+	}
+}

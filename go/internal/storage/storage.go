@@ -8,7 +8,9 @@ package storage
 
 import (
 	"encoding/csv"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -153,4 +155,91 @@ func (s *FileStore) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.file.Close()
+}
+
+// LoadReadings reads back today's UTC-dated CSV reading log from dir, for
+// callers that need the day's history rather than just live per-reading
+// Append (see internal/monitor, which needs matched time-series per
+// metric to run trend checks against). Mirrors OpenFileStore's "always
+// today" semantics rather than taking a date, since there's no caller
+// yet that needs anything but the current day.
+//
+// A missing file (today's first Append hasn't happened yet) returns a
+// nil slice, not an error — same "not an error" treatment OpenFileStore
+// gives a file it's about to create.
+//
+// A row that fails to parse (wrong column count, or a value/timestamp
+// that won't parse) is skipped rather than failing the whole read. A read
+// that fails after the header was already read successfully is treated
+// as a torn final line (e.g. from an unclean process kill mid-write) —
+// it stops there and returns everything read so far, rather than
+// discarding otherwise-good data over damage to the last line. A read
+// that fails before ever getting past the header is treated as a real
+// error instead: os.Open succeeds even when path is a directory (or
+// other non-regular file) on Unix, so that class of problem only
+// surfaces once something actually tries to read from it.
+func LoadReadings(dir string) ([]obd2.Reading, error) {
+	path := filepath.Join(dir, fmt.Sprintf("readings-%s.csv", time.Now().UTC().Format(dateFormat)))
+
+	f, err := os.Open(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("open reading log %q: %w", path, err)
+	}
+	defer f.Close()
+
+	reader := csv.NewReader(f)
+	reader.FieldsPerRecord = -1
+
+	var readings []obd2.Reading
+	skippedHeader := false
+	for {
+		row, err := reader.Read()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			if !skippedHeader {
+				return nil, fmt.Errorf("read reading log %q: %w", path, err)
+			}
+			break
+		}
+		if !skippedHeader {
+			skippedHeader = true
+			continue
+		}
+		if r, ok := parseRow(row); ok {
+			readings = append(readings, r)
+		}
+	}
+	return readings, nil
+}
+
+func parseRow(row []string) (obd2.Reading, bool) {
+	if len(row) != 5 {
+		return obd2.Reading{}, false
+	}
+
+	pid, err := strconv.ParseUint(row[0], 10, 8)
+	if err != nil {
+		return obd2.Reading{}, false
+	}
+	value, err := strconv.ParseFloat(row[2], 64)
+	if err != nil {
+		return obd2.Reading{}, false
+	}
+	timestamp, err := time.Parse(time.RFC3339Nano, row[4])
+	if err != nil {
+		return obd2.Reading{}, false
+	}
+
+	return obd2.Reading{
+		PID:       byte(pid),
+		Name:      row[1],
+		Value:     value,
+		Unit:      row[3],
+		Timestamp: timestamp,
+	}, true
 }

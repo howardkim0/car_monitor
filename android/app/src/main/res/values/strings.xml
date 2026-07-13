@@ -5,6 +5,10 @@
     <string name="notification_channel_name">OBD2 connection status</string>
     <string name="notification_channel_description">Shows whether Car Monitor is connected to the OBD2 dongle</string>
 
+    <string name="notification_anomaly_channel_name">Vehicle alerts</string>
+    <string name="notification_anomaly_channel_description">Warns about coolant, battery, fuel trim, and catalytic converter issues found in your driving data</string>
+    <string name="notification_anomaly_title">Car Monitor: %1$s</string>
+
     <string name="notification_title">Car Monitor</string>
     <string name="notification_connecting">Connecting to %1$s…</string>
     <string name="notification_connected">Connected to %1$s</string>

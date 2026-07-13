@@ -92,6 +92,9 @@ Kotlin is intentionally kept dumb (I/O plumbing + Android ceremony).
 │                            │  ├───────────────────────────┤  │                  │
 │                            │  │ internal/trend (trend      │  │                  │
 │                            │  │   detection & anomalies)   │  │                  │
+│                            │  ├───────────────────────────┤  │                  │
+│                            │  │ internal/monitor (matches  │  │                  │
+│                            │  │   readings to trend checks)│  │                  │
 │                            │  └───────────────────────────┘  │                  │
 │                            └────────────────────────────────┘                   │
 └──────────────────────────────────────────────────────────────────────────────────┘
@@ -113,16 +116,27 @@ Kotlin is intentionally kept dumb (I/O plumbing + Android ceremony).
    dropped — it goes to `internal/applog` (section 6) instead. A decode
    failure (a malformed or truncated response line) is not logged; it's
    treated as expected noise on a real ELM327 link and simply skipped.
-   *(Note: The `internal/trend` package is a standalone library containing
-   anomaly detection functions for coolant/oil temperatures, battery, fuel
-   trims, and catalytic converter health. In this version, it is not yet
-   active in the live data path; readings are stored and forwarded without
-   on-the-fly trend checking. See Section 12 for future integration plans).*
 5. `internal/obd2` decides *which* PIDs to request, based on the active
    `vehicle.Profile`'s PID list and a discovery step (section 5.2) — Kotlin
    never needs to know what a PID is. *How often* to poll is, for v1, a
    plain constant in `ObdForegroundService` (`Session`/`Commands()` carries
    no timing info); see section 12 for moving that into Go too.
+6. Separately from that live per-reading path, `ObdForegroundService` also
+   runs a periodic coroutine loop (`anomalyCheckLoop`, alongside the read/
+   write loops — `ANOMALY_CHECK_INTERVAL_MS`, currently 60s, the same
+   "Kotlin decides how often" precedent as step 5) that calls
+   `Session.CheckAnomalies()`. That re-reads today's CSV log
+   (`storage.LoadReadings`), hands it to `internal/monitor` to group into
+   per-metric time series (pairing same-cycle PIDs like the two fuel trims,
+   or the two O2 sensor voltages, by nearest timestamp — raw readings
+   arrive as separate rows, not matched pairs), and runs every applicable
+   `internal/trend` check. Only a metric whose severity level has *changed*
+   since the last check is reported back to Kotlin, via a second callback
+   interface (`AnomalyListener`) — so a persisting Warning stays silent
+   instead of re-notifying every 60s, but an escalation, a de-escalation,
+   or a recurrence after recovering to Normal each fire again. Kotlin turns
+   that into a heads-up notification on a separate, higher-importance
+   channel from the ongoing connection-status one.
 
 ## 5. Extensibility
 
@@ -273,6 +287,14 @@ No SQLite, no cgo dependency, nothing to migrate — trivial to inspect
 with `adb pull` and any spreadsheet tool or `csv`-aware shell tool,
 trivial to replace with a real DB later if querying needs grow.
 
+`storage.LoadReadings` reads today's file back into memory — the one
+other consumer of this format, used by trend/anomaly detection (section 4
+step 6) rather than anything Kotlin calls directly. A row that fails to
+parse is skipped rather than failing the whole read (skips forward past
+CSV-syntax-level damage instead, e.g. a torn final line from an unclean
+process kill mid-write); a file that can't be read at all — as opposed to
+simply not existing yet — is a real error.
+
 ### 6.2 App/error log
 
 Separate from the reading log deliberately: `internal/applog` is a
@@ -407,7 +429,8 @@ car_monitor/
 │   │   ├── vehicle/          # known vehicle profiles + PID maps
 │   │   ├── storage/          # CSV, UTC day-rotated reading log
 │   │   ├── applog/           # size-capped app/error log
-│   │   └── trend/            # trend detection and anomaly checking
+│   │   ├── trend/            # trend detection and anomaly checking
+│   │   └── monitor/          # groups readings into per-metric series for trend
 │   └── mobile/               # gomobile bind entry point (exported API)
 ├── android/                  # Android Studio / Gradle project
 │   └── app/
@@ -572,7 +595,38 @@ as a legitimate update to this app, so it's kept out of the repo entirely
   list" call the real fix, which isn't worth doing for a mismatch that
   self-heals on the very next poll cycle (at most, one cycle skips or
   double-requests a PID).
-- **Integrating Trend/Anomaly Detection**: `internal/trend` is fully implemented and tested as a standalone library to monitor vehicle vitals (temperatures, battery, fuel trims, catalytic converter) and detect abnormal trends before they trigger DTCs. The next step is wiring this library into `mobile.Session`'s callback pipeline, accumulating sliding history windows, and determining how to expose anomalies (e.g. surfacing to Kotlin via `ReadingListener` or writing them to `applog`).
+- Trend/anomaly detection (section 4 step 6) re-reads and re-parses
+  *today's entire* CSV log from disk on every check, even though every
+  `internal/trend` check function only ever looks at the last 30s-5min of
+  it — acceptable for now (CSV parsing tens of thousands of simple rows
+  is still fast in absolute terms, and `ANOMALY_CHECK_INTERVAL_MS` is
+  deliberately coarse, once a minute), but a full-day drive means paying
+  that cost against a steadily growing file for the rest of the day.
+  If this shows up as measurably expensive on a real device, the fix is
+  incremental — track a byte offset and only read new rows since the last
+  check, keeping a small in-memory sliding window per metric — not
+  re-architecting the check functions themselves.
+- `Session.CheckAnomalies`'s per-metric dedup state (`lastLevel`) is
+  scoped to the `Session`, not persisted across Bluetooth reconnects (a
+  new `Session` is created on each one), so an occasional duplicate
+  notification around a reconnect is possible. Accepted for the same
+  reason as the `CommandCount`/`CommandAt` gap above: the state would
+  need to move to a package-level variable (like `internal/applog`'s
+  logger) to survive `Session` recreation, which isn't worth the added
+  shared-mutable-state complexity for an edge case this cosmetic.
+- Only a metric moving to Warning/Critical ever notifies; there's no
+  "this recovered to Normal" notification. Deliberately out of scope for
+  v1 (the ask was "notify if an anomaly is found," not "and when it
+  isn't anymore") but worth revisiting — a driver who got a low-battery
+  alert earlier in a drive might reasonably want to know it's resolved.
+- `internal/monitor`'s metric-name constants (e.g. `"Coolant
+  Temperature"`) are matched against `vehicle.go`'s `PID.Name` fields by
+  exact string equality, with no compiler-enforced link between the two —
+  `monitor_test.go`'s `TestMetricNamesMatchVehicleProfile` guards against
+  a silent rename in one drifting away from the other, but a shared
+  source of truth (e.g. named constants `vehicle` exports and `monitor`
+  imports) would remove the possibility structurally instead of relying
+  on a test to catch it.
 
 ## 13. Testing
 

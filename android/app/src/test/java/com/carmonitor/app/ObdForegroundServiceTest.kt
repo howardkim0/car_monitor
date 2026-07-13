@@ -1,12 +1,16 @@
 package com.carmonitor.app
 
+import android.app.Notification
+import android.app.NotificationManager
 import android.bluetooth.BluetoothSocket
+import android.content.Context
 import android.content.Intent
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.verify
 import java.io.IOException
 import org.junit.After
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertSame
@@ -116,6 +120,42 @@ class ObdForegroundServiceTest {
 
         assertTrue("connectionJob must be cancelled by ACTION_STOP", job.isCancelled)
         assertFalse(job.isActive)
+    }
+
+    // The anomaly channel must actually be created with HIGH importance —
+    // if this silently regressed to the same LOW importance as the
+    // ongoing status channel, anomaly notifications would stop reliably
+    // interrupting a driver the way "coolant is overheating" needs to.
+    @Test
+    fun `onCreate creates the anomaly notification channel at HIGH importance`() {
+        val service = newService()
+        val manager = service.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+
+        val channel = manager.getNotificationChannel(ObdForegroundService.CHANNEL_ID_ANOMALY)
+
+        assertNotNull("anomaly notification channel should be created in onCreate()", channel)
+        assertEquals(NotificationManager.IMPORTANCE_HIGH, channel!!.importance)
+    }
+
+    // Confirms the anomaly listener actually posts something a user would
+    // see — the whole point of wiring internal/trend into the app at all
+    // — rather than only logging or updating internal state.
+    @Test
+    fun `anomalyListener posts a notification naming the metric on the anomaly channel`() {
+        val service = newService()
+        val manager = service.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+
+        service.anomalyListener.onAnomaly(
+            "Coolant Temperature", "CRITICAL", "Coolant temperature is critically high: 112.5°C", 0L
+        )
+
+        val wantId = 1000 + ("Coolant Temperature".hashCode() and 0xFF)
+        val posted: Notification? = manager.activeNotifications
+            .firstOrNull { it.id == wantId }
+            ?.notification
+
+        assertNotNull("expected a notification posted for the Coolant Temperature anomaly", posted)
+        assertEquals(ObdForegroundService.CHANNEL_ID_ANOMALY, posted!!.channelId)
     }
 
     // ACTION_QUIT is deliberately NOT exercised through onStartCommand()

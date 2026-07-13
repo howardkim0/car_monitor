@@ -32,6 +32,7 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import mobile.AnomalyListener
 import mobile.Mobile
 import mobile.ReadingListener
 import mobile.Session
@@ -104,6 +105,7 @@ class ObdForegroundService : Service() {
             Log.w(TAG, "Failed to initialize app log", e)
         }
         createNotificationChannel()
+        createAnomalyNotificationChannel()
         startForeground(NOTIFICATION_ID, buildNotification(latestState))
     }
 
@@ -319,7 +321,7 @@ class ObdForegroundService : Service() {
         connectSocket(newSocket)
 
         val newSession = try {
-            Mobile.newSession(filesDir.absolutePath, sessionListener)
+            Mobile.newSession(filesDir.absolutePath, sessionListener, anomalyListener)
         } catch (e: Exception) {
             newSocket.close()
             throw e
@@ -343,10 +345,61 @@ class ObdForegroundService : Service() {
         listeners.forEach { it.onReading(name, value, unit) }
     }
 
+    /**
+     * Posts a heads-up notification for a trend anomaly Go's Session.CheckAnomalies
+     * found — see anomalyCheckLoop for how often that runs. A separate, higher-
+     * importance channel from the ongoing connection-status one (CHANNEL_ID):
+     * "coolant is overheating" deserves to interrupt in a way "still connected"
+     * shouldn't. Not ongoing/persistent, and each metric gets its own notification
+     * ID (so e.g. a coolant alert and a battery alert coexist instead of one
+     * overwriting the other) rather than reusing NOTIFICATION_ID.
+     */
+    @VisibleForTesting
+    internal val anomalyListener = AnomalyListener { metric, level, message, _ ->
+        val notification = NotificationCompat.Builder(this, CHANNEL_ID_ANOMALY)
+            .setContentTitle(getString(R.string.notification_anomaly_title, metric))
+            .setContentText(message)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setContentIntent(
+                PendingIntent.getActivity(
+                    this,
+                    0,
+                    Intent(this, StatusActivity::class.java),
+                    PendingIntent.FLAG_IMMUTABLE
+                )
+            )
+            .setPriority(
+                if (level == "CRITICAL") NotificationCompat.PRIORITY_MAX else NotificationCompat.PRIORITY_DEFAULT
+            )
+            .setAutoCancel(true)
+            .build()
+        val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        manager.notify(ANOMALY_NOTIFICATION_ID_BASE + (metric.hashCode() and 0xFF), notification)
+    }
+
     /** Suspends until the reader or writer loop throws (i.e. the socket died). */
     private suspend fun runSessionLoops(socket: BluetoothSocket, session: Session) = coroutineScope {
         launch { readLoop(socket, session) }
         launch { writeLoop(socket, session) }
+        launch { anomalyCheckLoop(session) }
+    }
+
+    /**
+     * Periodically asks Go to re-check today's logged readings for trend
+     * anomalies (coolant temp, battery voltage, fuel trims, catalytic
+     * converter — see internal/trend and internal/monitor) and notifies on
+     * whatever's new. How often to check is this loop's call, same as
+     * writeLoop's POLL_CYCLE_MS is for polling — see DESIGN.md section 4
+     * step 5. A full day's worth of readings gets re-read from disk on every
+     * check (see storage.LoadReadings); ANOMALY_CHECK_INTERVAL_MS is
+     * intentionally much coarser than the polling cycle so that cost stays
+     * bounded rather than paid multiple times a second.
+     */
+    private suspend fun anomalyCheckLoop(session: Session) {
+        while (currentCoroutineContext().isActive) {
+            session.checkAnomalies()
+            delay(ANOMALY_CHECK_INTERVAL_MS)
+        }
     }
 
     private suspend fun readLoop(socket: BluetoothSocket, session: Session) {
@@ -409,6 +462,18 @@ class ObdForegroundService : Service() {
         manager.createNotificationChannel(channel)
     }
 
+    private fun createAnomalyNotificationChannel() {
+        val channel = NotificationChannel(
+            CHANNEL_ID_ANOMALY,
+            getString(R.string.notification_anomaly_channel_name),
+            NotificationManager.IMPORTANCE_HIGH
+        ).apply {
+            description = getString(R.string.notification_anomaly_channel_description)
+        }
+        val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        manager.createNotificationChannel(channel)
+    }
+
     private fun buildNotification(state: ConnectionState): Notification {
         val contentIntent = PendingIntent.getActivity(
             this,
@@ -452,6 +517,11 @@ class ObdForegroundService : Service() {
         private const val TAG = "ObdForegroundService"
         private const val CHANNEL_ID = "obd2_status"
         private const val NOTIFICATION_ID = 1
+        @VisibleForTesting
+        internal const val CHANNEL_ID_ANOMALY = "obd2_anomaly"
+        // Offset from NOTIFICATION_ID (1) so an anomaly notification can
+        // never collide with the persistent status one.
+        private const val ANOMALY_NOTIFICATION_ID_BASE = 1000
         private val SPP_UUID: UUID = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
         private const val INITIAL_BACKOFF_MS = 1_000L
         private const val MAX_BACKOFF_MS = 30_000L
@@ -463,6 +533,13 @@ class ObdForegroundService : Service() {
         // every other Bluetooth-dependent value in this file.
         private const val COMMAND_INTERVAL_MS = 50L
         private const val POLL_CYCLE_MS = 250L
+        // Deliberately much coarser than POLL_CYCLE_MS: each check re-reads
+        // and re-parses the whole day's CSV log from disk (see
+        // storage.LoadReadings), and every trend.Check* function already
+        // only cares about the last 30s-5min of data anyway — there's
+        // nothing to gain from checking more often than this, only more
+        // disk I/O paid for it as the day's log grows.
+        private const val ANOMALY_CHECK_INTERVAL_MS = 60_000L
         private const val PERMISSION_POLL_INTERVAL_MS = 3_000L
         private const val NO_CONNECTION_TIMEOUT_MS = 5 * 60 * 1_000L
         @VisibleForTesting

@@ -9,8 +9,10 @@ import (
 	"path/filepath"
 
 	"github.com/howardkim0/car_monitor/go/internal/device"
+	"github.com/howardkim0/car_monitor/go/internal/monitor"
 	"github.com/howardkim0/car_monitor/go/internal/obd2"
 	"github.com/howardkim0/car_monitor/go/internal/storage"
+	"github.com/howardkim0/car_monitor/go/internal/trend"
 	"github.com/howardkim0/car_monitor/go/internal/vehicle"
 )
 
@@ -21,13 +23,26 @@ type ReadingListener interface {
 	OnReading(pid int, name, unit string, value float64, unixMillis int64)
 }
 
+// AnomalyListener is implemented on the Kotlin side; gomobile bind turns
+// this into a Java interface CheckAnomalies calls back into whenever a
+// trend check's result has changed since the last check — see
+// Session.CheckAnomalies. level is one of trend.IssueLevel's string
+// values ("WARNING", "CRITICAL"); LevelNormal is never reported here,
+// only used internally to reset state once a metric recovers.
+type AnomalyListener interface {
+	OnAnomaly(metric, level, message string, unixMillis int64)
+}
+
 // Session is the single entry point the Android shell talks to: feed it
 // raw bytes off the Bluetooth socket, it decodes them against the
 // hardcoded device/vehicle profiles, persists them, and calls back into
 // listener.
 type Session struct {
-	inner *obd2.Session
-	store storage.Store
+	inner           *obd2.Session
+	store           storage.Store
+	readingsDir     string
+	anomalyListener AnomalyListener
+	lastLevel       map[string]trend.IssueLevel
 }
 
 // NewSession opens (or creates/resumes) the day-rotated CSV reading log
@@ -36,20 +51,28 @@ type Session struct {
 // private storage root (Android's filesDir) — this package organizes its
 // own subpaths within it, so callers no longer build a specific file
 // path themselves. listener may be nil if the caller only wants readings
-// persisted, not delivered live.
-func NewSession(storageDir string, listener ReadingListener) (*Session, error) {
-	store, err := storage.OpenFileStore(filepath.Join(storageDir, "readings"))
+// persisted, not delivered live; anomalyListener may be nil if the
+// caller doesn't want CheckAnomalies results delivered at all (in which
+// case CheckAnomalies is a cheap no-op).
+func NewSession(storageDir string, listener ReadingListener, anomalyListener AnomalyListener) (*Session, error) {
+	readingsDir := filepath.Join(storageDir, "readings")
+	store, err := storage.OpenFileStore(readingsDir)
 	if err != nil {
 		return nil, err
 	}
-	return newSessionWithStore(store, listener), nil
+	return newSessionWithStore(store, readingsDir, listener, anomalyListener), nil
 }
 
 // newSessionWithStore holds the actual reading-pipeline wiring, factored
 // out of NewSession so a test can inject a fake Store — e.g. to exercise
 // the Append-error path below without needing a real filesystem failure.
-func newSessionWithStore(store storage.Store, listener ReadingListener) *Session {
-	s := &Session{store: store}
+func newSessionWithStore(store storage.Store, readingsDir string, listener ReadingListener, anomalyListener AnomalyListener) *Session {
+	s := &Session{
+		store:           store,
+		readingsDir:     readingsDir,
+		anomalyListener: anomalyListener,
+		lastLevel:       make(map[string]trend.IssueLevel),
+	}
 	s.inner = obd2.NewSession(vehicle.Default(), func(r obd2.Reading) {
 		if err := s.store.Append(r); err != nil {
 			LogError(fmt.Sprintf("append reading (pid 0x%02X): %v", r.PID, err))
@@ -59,6 +82,47 @@ func newSessionWithStore(store storage.Store, listener ReadingListener) *Session
 		}
 	})
 	return s
+}
+
+// CheckAnomalies re-reads today's persisted log (see internal/storage's
+// LoadReadings) and runs it through internal/monitor's trend checks,
+// reporting to anomalyListener only the metrics whose level has changed
+// since the last call — e.g. Normal→Warning fires once, but repeated
+// calls stay silent while a condition persists, and only fire again if
+// it escalates (Warning→Critical), de-escalates but is still abnormal
+// (Critical→Warning), or recurs after recovering to Normal in between.
+// A no-op if anomalyListener is nil — nothing would consume the result.
+//
+// The dedup state above is scoped to this Session, not persisted across
+// Bluetooth reconnects (a new Session is created on each one — see
+// ObdForegroundService.openConnection in the Kotlin shell): an
+// occasional duplicate notification around a reconnect is an acceptable
+// tradeoff for not needing this state to survive Session recreation.
+//
+// How often to call this is the caller's decision, same as *how often to
+// poll* is for PID requests — see DESIGN.md section 4 step 5's
+// precedent; ObdForegroundService currently does both on coroutine-loop
+// timers of their own.
+func (s *Session) CheckAnomalies() {
+	if s.anomalyListener == nil {
+		return
+	}
+
+	readings, err := storage.LoadReadings(s.readingsDir)
+	if err != nil {
+		LogError(fmt.Sprintf("check anomalies: load readings: %v", err))
+		return
+	}
+
+	for _, a := range monitor.Evaluate(readings) {
+		if s.lastLevel[a.Metric] == a.Level {
+			continue
+		}
+		s.lastLevel[a.Metric] = a.Level
+		if a.Level != trend.LevelNormal {
+			s.anomalyListener.OnAnomaly(a.Metric, string(a.Level), a.Message, a.Timestamp.UnixMilli())
+		}
+	}
 }
 
 // Feed pushes newly-read bytes from the Bluetooth socket into the session.
