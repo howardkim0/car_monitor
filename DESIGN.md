@@ -425,6 +425,13 @@ needing `adb`.
   (no multi-process manifest config) — the standard way an Android app
   provides a true "exit," as opposed to Android's normal expectation that
   the OS manages process lifecycle.
+- **Git backup loop** runs independently of the Bluetooth connection lifecycle,
+  launched once in `onCreate()` (not recreated on every `onStartCommand()` like
+  `connectionJob`) and cancelled once in `onDestroy()`. Backing up existing
+  logs shouldn't require an active OBD connection, so this uses the Service's
+  existing coroutine scope rather than introducing a second background-execution
+  model like `WorkManager` — same "single mechanism, not two" rationale as
+  `RECEIVE_BOOT_COMPLETED` reusing the Service rather than a separate receiver.
 
 ## 8. Permissions
 
@@ -445,6 +452,8 @@ needing `adb`.
 - `RECEIVE_BOOT_COMPLETED` (optional, only if auto-start on boot is enabled)
 - `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` — pairs with the battery-optimization
   exemption prompt described in section 7
+- `INTERNET` — needed for git backup to the remote `car_monitor_logs.git`
+  repository
 
 ## 9. Repo layout
 
@@ -459,6 +468,7 @@ car_monitor/
 │   │   ├── vehicle/          # known vehicle profiles + PID maps
 │   │   ├── storage/          # CSV, UTC day-rotated reading log
 │   │   ├── applog/           # size-capped app/error log
+│   │   ├── gitbackup/        # git backup of logs to remote repo
 │   │   ├── sshkey/           # on-device SSH keypair generation and persistence
 │   │   ├── trend/            # trend detection and anomaly checking
 │   │   └── monitor/          # groups readings into per-metric series for trend
@@ -671,24 +681,6 @@ as a legitimate update to this app, so it's kept out of the repo entirely
   log) off the phone without `adb` — most likely Android's share sheet
   (`Intent.ACTION_SEND` with a zipped bundle of the day files), since
   these live in app-private storage and aren't otherwise reachable.
-- Automatic git backup of logs to `car_monitor_logs.git`: push
-  new/changed log files to
-  `git@github.com:howardkim0/car_monitor_logs.git` automatically,
-  triggered either when a new log file is detected (day rotation, or
-  app-log rotation) or on an hourly cadence, whichever comes first.
-  Open questions to resolve when this is actually designed: this is a
-  periodic, network-dependent, Bluetooth-independent background task —
-  a natural fit for `WorkManager`'s `PeriodicWorkRequest`, which cuts
-  against section 7's "Foreground Service, not WorkManager" stance
-  (that stance was specifically about the socket-holding loop, not
-  necessarily every background task in the app); Android has no
-  `git`/`ssh` binaries available by default, so this needs either a
-  pure-JVM Git implementation (e.g. JGit) in `android/`, or a pure-Go
-  one (e.g. `go-git`) exposed through `mobile`, which would fit this
-  doc's "Go owns business logic" split (section 3) better than putting
-  git plumbing in Kotlin; and section 8's permission list has no
-  `INTERNET` entry today (the app is Bluetooth/local-storage-only), so
-  this adds the app's first real network dependency.
 
 ## 13. Testing
 

@@ -104,6 +104,7 @@ class ObdForegroundService : Service() {
             // over what is, at worst, a logging feature not working.
             Log.w(TAG, "Failed to initialize app log", e)
         }
+        scope.launch { gitBackupLoop() }
         createNotificationChannel()
         createAnomalyNotificationChannel()
         startForeground(NOTIFICATION_ID, buildNotification(latestState))
@@ -395,6 +396,14 @@ class ObdForegroundService : Service() {
      * intentionally much coarser than the polling cycle so that cost stays
      * bounded rather than paid multiple times a second.
      */
+    private suspend fun gitBackupLoop() {
+        while (currentCoroutineContext().isActive) {
+            delay(GIT_BACKUP_CHECK_INTERVAL_MS)
+            runCatching { Mobile.syncLogsIfNeeded(filesDir.absolutePath) }
+                .onFailure { Log.w(TAG, "git backup check failed", it) }
+        }
+    }
+
     private suspend fun anomalyCheckLoop(session: Session) {
         while (currentCoroutineContext().isActive) {
             session.checkAnomalies()
@@ -587,6 +596,9 @@ class ObdForegroundService : Service() {
         // are short (< 20 bytes each), so this is roughly every ~100 command
         // responses — a few minutes of real driving at 200ms/command.
         private const val READ_DIAGNOSTIC_EVERY_N = 100L
+        // Git backup check cadence. Go's SyncIfNeeded decides whether real
+        // work happens, so this can be coarse; 5 minutes is fine.
+        private const val GIT_BACKUP_CHECK_INTERVAL_MS = 5 * 60 * 1_000L
         @VisibleForTesting
         internal const val ACTION_STOP = "com.carmonitor.app.action.STOP"
         @VisibleForTesting
