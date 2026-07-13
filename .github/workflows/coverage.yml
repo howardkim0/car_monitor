@@ -18,6 +18,8 @@ jobs:
   go-coverage:
     name: Go coverage (100% gate)
     runs-on: ubuntu-latest
+    permissions:
+      contents: write # only used to commit the coverage badge, on push to main
     steps:
       - uses: actions/checkout@v4
 
@@ -33,6 +35,28 @@ jobs:
           total="$(go tool cover -func=coverage.out | tail -1 | awk '{print $NF}' | tr -d '%')"
           echo "Total statement coverage: ${total}%"
           echo "total=${total}" >> "$GITHUB_OUTPUT"
+
+      # Generated and committed here (not just checked) so the README's
+      # badge is a real, workflow-updated file — see scripts/make_badge.py.
+      # Runs before the floor check below so a regression still updates the
+      # badge (in red) instead of leaving a stale "100%" badge behind on a
+      # failed run.
+      - name: Generate coverage badge
+        run: |
+          color="#4c1"
+          awk -v t="${{ steps.coverage.outputs.total }}" 'BEGIN { exit !(t + 0 < 100) }' && color="#e05d44"
+          python3 scripts/make_badge.py coverage "${{ steps.coverage.outputs.total }}%" "$color" docs/badges/coverage.svg
+
+      - name: Commit coverage badge
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add docs/badges/coverage.svg
+          if ! git diff --staged --quiet; then
+            git commit -m "Update coverage badge [skip ci]"
+            git push
+          fi
 
       - name: Check 100% floor
         id: check

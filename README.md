@@ -1,6 +1,6 @@
 # Car Monitor
 
-[![Coverage](https://github.com/howardkim0/car_monitor/actions/workflows/coverage.yml/badge.svg)](https://github.com/howardkim0/car_monitor/actions/workflows/coverage.yml)
+[![Go coverage](https://raw.githubusercontent.com/howardkim0/car_monitor/main/docs/badges/coverage.svg)](https://github.com/howardkim0/car_monitor/actions/workflows/coverage.yml)
 [![Release APK](https://github.com/howardkim0/car_monitor/actions/workflows/release-apk.yml/badge.svg)](https://github.com/howardkim0/car_monitor/actions/workflows/release-apk.yml)
 
 An Android app that sits in the background, maintains a Bluetooth connection
@@ -13,6 +13,8 @@ and the Android foreground service.
 
 For the full architecture, extensibility points, and design rationale, see
 **[DESIGN.md](DESIGN.md)** — this README only covers getting the app running.
+
+<img src="docs/screenshots/status-screen.jpg" alt="Car Monitor status screen: connection state, then Export Logs, Copy SSH Public Key, Start Scanning, and Quit App as a full-width vertical button stack" width="300">
 
 ## Install
 
@@ -59,7 +61,8 @@ prompted, or background monitoring will be killed by Android after a while.
   100%-enforced test coverage floor.
 - `android/` — the Kotlin shell: Bluetooth I/O, the foreground service,
   permissions, and the single status screen.
-- `docs/` — implementation plans for non-trivial features (`plan-*.md`).
+- `docs/` — implementation plans for non-trivial features (`plan-*.md`),
+  screenshots, and the CI-generated coverage badge.
 - `scripts/setup_ubuntu.sh` — installs/updates the full local build
   toolchain.
 
