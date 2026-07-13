@@ -19,3 +19,7 @@ android/*.apk
 # runner-temp path at build time, not stored in the repo.
 *.keystore
 *.jks
+
+# Python bytecode cache from running scripts/*.py locally.
+__pycache__/
+*.pyc

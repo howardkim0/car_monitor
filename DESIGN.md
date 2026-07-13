@@ -153,6 +153,29 @@ business logic requiring a Go round-trip.
    that into a heads-up notification on a separate, higher-importance
    channel from the ongoing connection-status one.
 
+   Notification building (channel creation, title/message/priority,
+   `setAutoCancel(true)` so a tap dismisses it — an anomaly notification is
+   never `setOngoing`, so a swipe always dismisses it too) lives in a
+   standalone `AnomalyNotifications` object
+   (`android/.../AnomalyNotifications.kt`), not inline in
+   `ObdForegroundService`, so `StatusActivity`'s "Test Alert" button (posts
+   a sample WARNING-level notification under the metric name "Test Alert,"
+   so it's unambiguous it isn't a real reading) can reuse the exact same
+   code path without `ObdForegroundService` needing to be running. That
+   decoupling matters: routing the test button through the Service instead
+   (e.g. an `ACTION_TEST_ALERT` intent like `ACTION_STOP`/`ACTION_QUIT`)
+   would call `startService`/`startForegroundService`, which — if the user
+   had already tapped Stop — would silently resume the whole foreground
+   service and its connection loop, violating section 7's "resuming after
+   a stop is always explicit" rule. `StatusActivity` posts directly and
+   ensures the notification channel exists itself first (idempotent —
+   `NotificationManager.createNotificationChannel` is documented as a
+   no-op when the channel already exists unchanged), sidestepping the
+   Service's lifecycle entirely. `ObdForegroundService`'s `anomalyListener`
+   and `onCreate()` are updated to call `AnomalyNotifications.post`/
+   `.ensureChannel` too, so there is one implementation of notification
+   building, not two that can drift apart.
+
 ## 5. Extensibility
 
 ### 5.1 Bluetooth devices
