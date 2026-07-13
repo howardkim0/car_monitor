@@ -635,6 +635,46 @@ as a legitimate update to this app, so it's kept out of the repo entirely
   source of truth (e.g. named constants `vehicle` exports and `monitor`
   imports) would remove the possibility structurally instead of relying
   on a test to catch it.
+- Reading log files (section 6.1) rotate daily but are never deleted,
+  and the app log (section 6.2) is size-capped but not age-capped. Cap
+  retention at 30 days: add a prune pass (e.g. on rotation, or on a
+  periodic check like `ANOMALY_CHECK_INTERVAL_MS`) that deletes
+  reading-log files older than 30 days, so at most 30 daily files are
+  kept on device at once.
+- Manual log export from the app: a button on the status screen that
+  lets the user pull the on-device reading-log CSVs (and/or the app
+  log) off the phone without `adb` — most likely Android's share sheet
+  (`Intent.ACTION_SEND` with a zipped bundle of the day files), since
+  these live in app-private storage and aren't otherwise reachable.
+- Automatic git backup of logs to `car_monitor_logs.git`: push
+  new/changed log files to
+  `git@github.com:howardkim0/car_monitor_logs.git` automatically,
+  triggered either when a new log file is detected (day rotation, or
+  app-log rotation) or on an hourly cadence, whichever comes first.
+  Open questions to resolve when this is actually designed: this is a
+  periodic, network-dependent, Bluetooth-independent background task —
+  a natural fit for `WorkManager`'s `PeriodicWorkRequest`, which cuts
+  against section 7's "Foreground Service, not WorkManager" stance
+  (that stance was specifically about the socket-holding loop, not
+  necessarily every background task in the app); Android has no
+  `git`/`ssh` binaries available by default, so this needs either a
+  pure-JVM Git implementation (e.g. JGit) in `android/`, or a pure-Go
+  one (e.g. `go-git`) exposed through `mobile`, which would fit this
+  doc's "Go owns business logic" split (section 3) better than putting
+  git plumbing in Kotlin; and section 8's permission list has no
+  `INTERNET` entry today (the app is Bluetooth/local-storage-only), so
+  this adds the app's first real network dependency.
+- An on-device SSH keypair for the git backup above: generate a
+  keypair for authenticating to `car_monitor_logs.git`, and add a "Copy
+  SSH public key" button to the main status screen so the user can
+  register it as a GitHub deploy key. There's no `ssh-keygen` binary on
+  Android either, so this is realistically `crypto/ed25519` in `go/`
+  (keeping key generation in Go per the same split as above) rather
+  than shelling out; the private key needs to live somewhere
+  better-protected than a plain file in app-private storage — Android
+  Keystore is the usual answer, though a hardware-backed key doesn't
+  export raw key material, which may or may not matter depending on
+  which git-over-ssh library ends up handling the actual push.
 
 ## 13. Testing
 
