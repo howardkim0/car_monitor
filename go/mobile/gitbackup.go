@@ -22,7 +22,7 @@ type gitLogSyncer interface {
 // gitSyncer is package-level and independent of any Session deliberately:
 // a Session is recreated on every Bluetooth reconnect (see
 // ObdForegroundService.openConnection()), but git backup state must
-// persist across that churn so it syncs on a log-rotation or hourly
+// persist across that churn so it syncs on a log-rotation or interval-elapsed
 // cadence, not on every connection.
 var (
 	gitSyncerMu sync.Mutex
