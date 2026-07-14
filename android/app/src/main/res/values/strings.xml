@@ -46,10 +46,12 @@
     <string name="quit_app_button">Quit App</string>
 
     <string name="pair_devices_button">Pair Bluetooth OBD2 Scanners</string>
-    <string name="show_paired_button">Show Paired Scanners</string>
+    <string name="show_paired_button">Show Paired Devices</string>
     <string name="device_scan_instructions">Tap a paired device to select it, or scan for nearby ones.</string>
     <string name="device_scan_button">Scan for Devices</string>
     <string name="device_scan_scanning">Scanning…</string>
+    <string name="device_scan_stop_button">Stop Scanning</string>
+    <string name="device_scan_start_failed">Could not start scanning — try again</string>
     <string name="device_scan_paired_section">Paired Devices</string>
     <string name="device_scan_available_section">Nearby Devices</string>
     <string name="device_scan_pairing">Pairing…</string>

@@ -41,6 +41,7 @@ class DeviceScanActivity : AppCompatActivity() {
     private val scope = CoroutineScope(Dispatchers.Main + Job())
     private val discoveredAddresses = mutableSetOf<String>()
     private var pairingDeviceAddress: String? = null
+    private var isScanning = false
 
     private val requestPermissions = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -62,7 +63,7 @@ class DeviceScanActivity : AppCompatActivity() {
                     }
                 }
                 BluetoothAdapter.ACTION_DISCOVERY_FINISHED -> {
-                    scanButton.isEnabled = true
+                    isScanning = false
                     scanButton.text = getString(R.string.device_scan_button)
                 }
                 BluetoothDevice.ACTION_BOND_STATE_CHANGED -> {
@@ -122,22 +123,37 @@ class DeviceScanActivity : AppCompatActivity() {
             adapter?.bondedDevices?.forEach { device -> addDeviceRow(pairedContainer, device, isPaired = true) }
         } catch (e: SecurityException) {
             Mobile.logError("Failed to list bonded devices: $e")
+            statusText.text = getString(R.string.bluetooth_permission_needed)
         }
     }
 
     private fun startScan() {
         val adapter = (getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager).adapter ?: return
+        if (isScanning) {
+            try {
+                adapter.cancelDiscovery()
+            } catch (e: SecurityException) {
+                Mobile.logError("Failed to cancel discovery: $e")
+            }
+            isScanning = false
+            scanButton.text = getString(R.string.device_scan_button)
+            return
+        }
         availableContainer.removeAllViews()
         discoveredAddresses.clear()
-        scanButton.isEnabled = false
-        scanButton.text = getString(R.string.device_scan_scanning)
-        try {
+        val started = try {
             adapter.startDiscovery()
         } catch (e: SecurityException) {
             Mobile.logError("Failed to start discovery: $e")
-            scanButton.isEnabled = true
-            scanButton.text = getString(R.string.device_scan_button)
+            Toast.makeText(this, getString(R.string.device_scan_start_failed), Toast.LENGTH_SHORT).show()
+            false
         }
+        if (!started) {
+            Toast.makeText(this, getString(R.string.device_scan_start_failed), Toast.LENGTH_SHORT).show()
+            return
+        }
+        isScanning = true
+        scanButton.text = getString(R.string.device_scan_stop_button)
     }
 
     private fun addDeviceRow(container: LinearLayout, device: BluetoothDevice, isPaired: Boolean) {
@@ -169,6 +185,7 @@ class DeviceScanActivity : AppCompatActivity() {
             pairingDeviceAddress = null
             button.isEnabled = true
             button.text = deviceName(device)
+            Toast.makeText(this, getString(R.string.device_pairing_failed), Toast.LENGTH_SHORT).show()
         }
     }
 

@@ -4,6 +4,7 @@ import android.widget.Button
 import android.widget.TextView
 import org.junit.After
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.Robolectric
@@ -34,5 +35,12 @@ class DeviceScanActivityTest {
         val activity = newActivity()
         assertNotNull(activity.findViewById<Button>(R.id.scanButton))
         assertNotNull(activity.findViewById<TextView>(R.id.deviceScanStatusText))
+    }
+
+    @Test
+    fun `scan button starts enabled and stays enabled`() {
+        val activity = newActivity()
+        val button = activity.findViewById<Button>(R.id.scanButton)
+        assertTrue("scan button should never be disabled — it's a toggle now", button.isEnabled)
     }
 }
