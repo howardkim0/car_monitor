@@ -34,7 +34,14 @@ jobs:
     name: Build and publish debug APK
     runs-on: ubuntu-latest
     steps:
+      # fetch-depth: 0 (full history, not just the checked-out commit) —
+      # android/app/build.gradle.kts derives versionCode/versionName from
+      # `git rev-list --count HEAD`, which needs the full commit log to be
+      # meaningful. The default shallow checkout would make every build
+      # report a commit count of 1. See DESIGN.md section 6.2.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: ./.github/actions/setup-gomobile-android
 

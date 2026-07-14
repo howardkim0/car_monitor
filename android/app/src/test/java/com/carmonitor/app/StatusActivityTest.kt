@@ -60,6 +60,19 @@ class StatusActivityTest {
     }
 
     @Test
+    fun `version label shows versionName and GIT_COMMIT from BuildConfig`() {
+        val activity = newActivity()
+
+        val versionText = activity.findViewById<android.widget.TextView>(R.id.versionText).text.toString()
+
+        assertEquals(
+            "version label should be built directly from BuildConfig, not hardcoded",
+            activity.getString(R.string.app_version_label, BuildConfig.VERSION_NAME, BuildConfig.GIT_COMMIT),
+            versionText
+        )
+    }
+
+    @Test
     fun `a terminal TimedOut state also unbinds`() {
         val activity = newActivity()
         assertTrue(activity.isBound)

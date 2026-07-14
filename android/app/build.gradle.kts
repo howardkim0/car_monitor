@@ -23,6 +23,26 @@ fun gitCommitHash(): String =
         "unknown"
     }
 
+// versionCode/versionName double as a per-commit build number: the repo's
+// total commit count, so every commit gets a distinct, automatically
+// increasing version with no manual tagging step. Unlike gitCommitHash()
+// above, this needs *full* history (git log, not just the checked-out
+// commit) — CI's checkout must use fetch-depth: 0, or every CI build would
+// report "1". Falls back to 1 if git isn't available at all, matching
+// gitCommitHash()'s "unknown" fallback in spirit (always build something
+// valid rather than fail the build over a version-numbering nicety).
+fun gitCommitCount(): Int =
+    try {
+        val process = ProcessBuilder("git", "rev-list", "--count", "HEAD")
+            .directory(rootDir)
+            .redirectErrorStream(true)
+            .start()
+        val output = process.inputStream.bufferedReader().readText().trim()
+        if (process.waitFor() == 0) output.toIntOrNull() ?: 1 else 1
+    } catch (e: Exception) {
+        1
+    }
+
 android {
     namespace = "com.carmonitor.app"
     compileSdk = 34
@@ -31,8 +51,9 @@ android {
         applicationId = "com.carmonitor.app"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0"
+        val commitCount = gitCommitCount()
+        versionCode = commitCount
+        versionName = "0.$commitCount"
         buildConfigField("String", "GIT_COMMIT", "\"${gitCommitHash()}\"")
     }
 

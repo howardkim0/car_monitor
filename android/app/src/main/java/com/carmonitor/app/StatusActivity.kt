@@ -127,6 +127,9 @@ class StatusActivity : AppCompatActivity(), ObdForegroundService.StatusListener 
         }
         setContentView(R.layout.activity_status)
 
+        findViewById<TextView>(R.id.versionText).text =
+            getString(R.string.app_version_label, BuildConfig.VERSION_NAME, BuildConfig.GIT_COMMIT)
+
         statusText = findViewById(R.id.statusText)
         readingsText = findViewById(R.id.readingsText)
         batteryOptimizationButton = findViewById(R.id.batteryOptimizationButton)

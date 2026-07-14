@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Car Monitor</string>
+    <string name="app_version_label">v%1$s (%2$s)</string>
 
     <string name="notification_channel_name">OBD2 connection status</string>
     <string name="notification_channel_description">Shows whether Car Monitor is connected to the OBD2 dongle</string>
