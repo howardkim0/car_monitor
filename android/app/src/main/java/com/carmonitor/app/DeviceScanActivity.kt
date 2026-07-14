@@ -58,12 +58,14 @@ class DeviceScanActivity : AppCompatActivity() {
             when (intent.action) {
                 BluetoothDevice.ACTION_FOUND -> {
                     val device = intent.getBluetoothDeviceExtra() ?: return
+                    logDebug("ACTION_FOUND: bondState=${device.bondState} alreadySeen=${discoveredAddresses.contains(device.address)}")
                     if (device.bondState != BluetoothDevice.BOND_BONDED && discoveredAddresses.add(device.address)) {
                         addDeviceRow(availableContainer, device, isPaired = false)
                         statusText.text = getString(R.string.device_scan_found_count, discoveredAddresses.size)
                     }
                 }
                 BluetoothAdapter.ACTION_DISCOVERY_FINISHED -> {
+                    logDebug("ACTION_DISCOVERY_FINISHED: found=${discoveredAddresses.size}")
                     isScanning = false
                     scanButton.text = getString(R.string.device_scan_button)
                     statusText.text = getString(R.string.device_scan_finished_count, discoveredAddresses.size)
@@ -118,6 +120,15 @@ class DeviceScanActivity : AppCompatActivity() {
         super.onDestroy()
     }
 
+    // Off the main thread: the gomobile-bound Mobile class loads a native
+    // library on first touch, which both belongs off the UI/BroadcastReceiver
+    // thread and (in test builds under Robolectric, which has no native lib
+    // to load) must not run synchronously or every activity/receiver test
+    // exercising these call sites fails with UnsatisfiedLinkError.
+    private fun logDebug(message: String) {
+        scope.launch(Dispatchers.IO) { Mobile.logDebug(message) }
+    }
+
     private fun loadPairedDevices() {
         val adapter = (getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager).adapter
         pairedContainer.removeAllViews()
@@ -158,6 +169,7 @@ class DeviceScanActivity : AppCompatActivity() {
     private fun startScan() {
         val adapter = (getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager).adapter ?: return
         if (isScanning) {
+            logDebug("Scan stopped by user: found=${discoveredAddresses.size}")
             try {
                 adapter.cancelDiscovery()
             } catch (e: SecurityException) {
@@ -168,7 +180,9 @@ class DeviceScanActivity : AppCompatActivity() {
             statusText.text = getString(R.string.device_scan_finished_count, discoveredAddresses.size)
             return
         }
-        if (!isLocationEnabled()) {
+        val locationEnabled = isLocationEnabled()
+        logDebug("Scan requested: sdkInt=${Build.VERSION.SDK_INT} locationEnabled=$locationEnabled")
+        if (!locationEnabled) {
             statusText.text = getString(R.string.location_services_required)
             return
         }
@@ -180,6 +194,7 @@ class DeviceScanActivity : AppCompatActivity() {
             Mobile.logError("Failed to start discovery: $e")
             false
         }
+        logDebug("adapter.startDiscovery() returned $started")
         if (!started) {
             // Single Toast for both failure modes — a denied permission
             // (caught above, mapped to false) and startDiscovery() itself

@@ -4,6 +4,25 @@ plugins {
     id("org.jetbrains.kotlinx.kover")
 }
 
+// Stamped into BuildConfig so a log export can be matched to the exact
+// commit that produced the running build — this session diagnosed the same
+// git-push SSH failure twice from log evidence before realizing the
+// installed APK predated the fix (see DESIGN.md section 12). Reads HEAD
+// directly rather than requiring full history, so it works against CI's
+// shallow checkout too; falls back to "unknown" if git isn't available at
+// all (e.g. building from a source archive with no .git directory).
+fun gitCommitHash(): String =
+    try {
+        val process = ProcessBuilder("git", "rev-parse", "--short=12", "HEAD")
+            .directory(rootDir)
+            .redirectErrorStream(true)
+            .start()
+        val output = process.inputStream.bufferedReader().readText().trim()
+        if (process.waitFor() == 0 && output.isNotEmpty()) output else "unknown"
+    } catch (e: Exception) {
+        "unknown"
+    }
+
 android {
     namespace = "com.carmonitor.app"
     compileSdk = 34
@@ -14,6 +33,11 @@ android {
         targetSdk = 34
         versionCode = 1
         versionName = "1.0"
+        buildConfigField("String", "GIT_COMMIT", "\"${gitCommitHash()}\"")
+    }
+
+    buildFeatures {
+        buildConfig = true
     }
 
     // Set only in CI (see .github/workflows/release-apk.yml): signs the debug

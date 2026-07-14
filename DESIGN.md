@@ -263,7 +263,7 @@ is Android framework ceremony, not business logic):
 
   A follow-up report ("the toggle works now, but no discoverable devices
   ever show up") arrived with no new evidence in `car_monitor_logs`
-  (section 12's git-backup sync hadn't fired since the prior report —
+  (section 7's git-backup sync hadn't fired since the prior report —
   a short test session between the automatic 5-minute checks leaves
   nothing to diff). Re-review found a genuine second gap in the
   `neverForLocation` fix (section 8): that flag only exempts API 31+
@@ -285,6 +285,21 @@ is Android framework ceremony, not business logic):
   nearby devices, unlike most ELM327 dongles, aren't discoverable by
   default) is distinguishable from something being stuck, and so any
   *next* report is self-diagnosing without a git-log round trip.
+
+  A third report arrived with the previous two fixes already installed,
+  but its `app.log` export turned out to contain no evidence from the
+  current build at all — every line predated the install (confirmed by
+  comparing log timestamps against the GitHub Actions run that published
+  that release). Two lessons taken from that: first, `DeviceScanActivity`
+  had no logging at all on its non-error scan path, so even a
+  same-session export couldn't confirm whether a scan had actually run;
+  it now logs the location check result, `startDiscovery()`'s return
+  value, and each `ACTION_FOUND`/`ACTION_DISCOVERY_FINISHED` via
+  `Mobile.logDebug` (see section 6.2). Second, nothing in `app.log`
+  identified which commit produced it, making "is this actually the
+  fixed build?" a guessing game from timestamps alone — every build now
+  stamps `BuildConfig.GIT_COMMIT` (section 6.2) and logs it once at
+  app startup.
 - **"Show Paired Devices"** is a lighter-weight `AlertDialog` on the
   status screen (no new Activity — it only needs `getBondedDevices()`,
   not the ongoing discovery lifecycle a full scan needs) listing every
@@ -504,6 +519,29 @@ and a failure there surfaces as `UnsatisfiedLinkError`/
 `catch (e: Exception)` does not catch, which would otherwise crash the
 whole foreground service over what is, at worst, a logging feature not
 working.
+
+That same native-library-on-first-touch behavior is also why every
+`Mobile.*` call from an Activity in this codebase is dispatched off the
+main thread — via each Activity's own `scope.launch(Dispatchers.IO) {
+... }` — rather than called inline. It's not just about keeping
+`app.log`'s disk write off the UI thread: under Robolectric (plain-JVM
+unit tests, section 13), there's no native `libgojni.so` to load at
+all, so a synchronous `Mobile.*` call reached during `onCreate()`
+throws `UnsatisfiedLinkError` and fails the test outright. `StatusActivity`
+and `DeviceScanActivity` both follow this pattern for every `Mobile.*`
+call, including the device-scan and build-stamp logging described
+below — a real regression caught by `./gradlew testDebugUnitTest` the
+first time that logging was added synchronously.
+
+Every build also stamps a `BuildConfig.GIT_COMMIT` field (the output of
+`git rev-parse --short=12 HEAD` at build time, `"unknown"` if git isn't
+available) and `StatusActivity` logs it once via `Mobile.logDebug` on
+app startup. This exists because a bug report's log evidence has more
+than once turned out to predate the fix it was meant to confirm or
+refute — with no build identifier in `app.log`, that was only
+discoverable by cross-referencing log timestamps against GitHub Actions
+run times after the fact. Section 5.1 covers the matching addition of
+scan-lifecycle logging to `DeviceScanActivity`.
 
 ### 6.3 SSH key for log backup
 

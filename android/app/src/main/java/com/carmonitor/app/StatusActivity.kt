@@ -115,6 +115,15 @@ class StatusActivity : AppCompatActivity(), ObdForegroundService.StatusListener 
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Off the main thread, matching every other Mobile.* call in this
+        // file: the gomobile-bound Mobile class loads a native library on
+        // first touch, which both belongs off the UI thread and (in test
+        // builds under Robolectric, which has no native lib to load) must
+        // not run synchronously during onCreate() or every activity test
+        // fails with UnsatisfiedLinkError.
+        scope.launch(Dispatchers.IO) {
+            Mobile.logDebug("App started: build=${BuildConfig.GIT_COMMIT} versionName=${BuildConfig.VERSION_NAME}")
+        }
         setContentView(R.layout.activity_status)
 
         statusText = findViewById(R.id.statusText)
