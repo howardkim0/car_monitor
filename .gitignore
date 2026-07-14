@@ -23,3 +23,9 @@ android/*.apk
 # Python bytecode cache from running scripts/*.py locally.
 __pycache__/
 *.pyc
+
+# go test -coverprofile output, generated locally when checking coverage
+# (githooks/pre-commit runs this to a temp path, not go/coverage.out — a
+# prior commit accidentally committed these from a manual run).
+go/coverage.out
+go/coverage.html
