@@ -162,6 +162,20 @@ class ObdForegroundService : Service() {
     }
 
     /**
+     * Closes the current connection (if any) so connectionLoop's own retry
+     * logic immediately attempts a fresh connection using the (possibly
+     * just-changed) selected device — see DESIGN.md section 7. Deliberately
+     * lighter than stopServiceImmediately(): no connectionJob cancellation,
+     * no terminal ConnectionState, no "Start Scanning" required afterward.
+     * A no-op if the service isn't currently connecting/connected (e.g.
+     * stopped) — the new selection simply becomes what's used whenever the
+     * user next taps Start Scanning.
+     */
+    fun reconnectNow() {
+        closeConnection()
+    }
+
+    /**
      * Connect, run the read/write loops until the socket fails, then
      * reconnect with exponential backoff (capped) per DESIGN.md section 7.
      * Never lets a real failure escape and kill the service — except that
@@ -311,13 +325,15 @@ class ObdForegroundService : Service() {
             throw IOException("Bluetooth is disabled")
         }
 
-        // No adapter.cancelDiscovery() here: this app never calls
-        // startDiscovery() (DESIGN.md's non-goals rule out a device
-        // picker/scan UI for v1), and cancelDiscovery() requires the
-        // BLUETOOTH_SCAN runtime permission on API 31+ that nothing else in
-        // the app requests — calling it would turn "not scanning" into a
-        // hard SecurityException that blocks every connection attempt.
-        val device = adapter.getRemoteDevice(Mobile.deviceMAC())
+        // No adapter.cancelDiscovery() here: DeviceScanActivity (section 5.1)
+        // is responsible for cancelling its own discovery when it finishes or
+        // the user navigates away, so by the time a connection attempt reaches
+        // here no discovery should be active. Calling cancelDiscovery()
+        // speculatively would still risk a SecurityException if BLUETOOTH_SCAN
+        // was denied (it's only requested by DeviceScanActivity, not
+        // unconditionally at every connection attempt), for no benefit if
+        // nothing is actually scanning.
+        val device = adapter.getRemoteDevice(Mobile.deviceMAC(filesDir.absolutePath))
         val newSocket = device.createRfcommSocketToServiceRecord(SPP_UUID)
         connectSocket(newSocket)
 
@@ -531,8 +547,8 @@ class ObdForegroundService : Service() {
             PendingIntent.FLAG_IMMUTABLE
         )
         val text = when (state) {
-            is ConnectionState.Connecting -> getString(R.string.notification_connecting, Mobile.deviceMAC())
-            is ConnectionState.Connected -> getString(R.string.notification_connected, Mobile.deviceMAC())
+            is ConnectionState.Connecting -> getString(R.string.notification_connecting, Mobile.selectedDeviceName(filesDir.absolutePath))
+            is ConnectionState.Connected -> getString(R.string.notification_connected, Mobile.selectedDeviceName(filesDir.absolutePath))
             is ConnectionState.Disconnected -> getString(R.string.notification_disconnected, state.retryInSeconds)
             is ConnectionState.PermissionMissing -> getString(R.string.notification_permission_missing)
             is ConnectionState.TimedOut -> getString(R.string.notification_timed_out)

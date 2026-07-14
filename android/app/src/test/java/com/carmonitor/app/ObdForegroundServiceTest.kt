@@ -181,6 +181,12 @@ class ObdForegroundServiceTest {
         io.mockk.verify(exactly = 1) { mockOutputStream.flush() }
     }
 
+    @Test
+    fun `reconnectNow does not throw when nothing is connected`() {
+        val service = newService()
+        service.reconnectNow() // must not throw
+    }
+
     // ACTION_QUIT is deliberately NOT exercised through onStartCommand()
     // here: its branch ends in Process.killProcess(Process.myPid()),
     // which would kill the JVM this test suite itself runs in, not just

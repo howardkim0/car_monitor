@@ -1,11 +1,13 @@
 package com.carmonitor.app
 
 import android.Manifest
+import android.bluetooth.BluetoothManager
 import android.content.ClipboardManager
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -18,7 +20,9 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.VisibleForTesting
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -47,6 +51,8 @@ class StatusActivity : AppCompatActivity(), ObdForegroundService.StatusListener 
     private lateinit var copySshKeyButton: Button
     private lateinit var testAlertButton: Button
     private lateinit var gitPushButton: Button
+    private lateinit var pairDevicesButton: Button
+    private lateinit var showPairedButton: Button
     private lateinit var stopButton: Button
     private lateinit var quitButton: Button
 
@@ -55,6 +61,8 @@ class StatusActivity : AppCompatActivity(), ObdForegroundService.StatusListener 
     private val scope = CoroutineScope(Dispatchers.Main + Job())
 
     private var cachedSshPublicKey: String? = null
+
+    private var latestConnectionState: ObdForegroundService.ConnectionState? = null
 
     @VisibleForTesting
     internal fun exportScopeIsActive(): Boolean = scope.isActive
@@ -97,6 +105,14 @@ class StatusActivity : AppCompatActivity(), ObdForegroundService.StatusListener 
         ObdForegroundService.start(this)
     }
 
+    private val deviceScanLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == RESULT_OK) {
+            boundService?.reconnectNow()
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_status)
@@ -114,6 +130,10 @@ class StatusActivity : AppCompatActivity(), ObdForegroundService.StatusListener 
         testAlertButton.setOnClickListener { showTestAlert() }
         gitPushButton = findViewById(R.id.gitPushButton)
         gitPushButton.setOnClickListener { gitPush() }
+        pairDevicesButton = findViewById(R.id.pairDevicesButton)
+        pairDevicesButton.setOnClickListener { deviceScanLauncher.launch(Intent(this, DeviceScanActivity::class.java)) }
+        showPairedButton = findViewById(R.id.showPairedButton)
+        showPairedButton.setOnClickListener { showPairedDevicesDialog() }
         stopButton = findViewById(R.id.stopButton)
         stopButton.setOnClickListener { if (stoppedByUser) startScanning() else stopMonitoring() }
         quitButton = findViewById(R.id.quitButton)
@@ -176,6 +196,7 @@ class StatusActivity : AppCompatActivity(), ObdForegroundService.StatusListener 
     }
 
     override fun onStateChanged(state: ObdForegroundService.ConnectionState) {
+        latestConnectionState = state
         runOnUiThread {
             when (state) {
                 is ObdForegroundService.ConnectionState.Connecting ->
@@ -267,11 +288,7 @@ class StatusActivity : AppCompatActivity(), ObdForegroundService.StatusListener 
         if (value == value.toLong().toDouble()) value.toLong().toString() else "%.1f".format(value)
 
     private fun requiredPermissions(): Array<String> = buildList {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            add(Manifest.permission.BLUETOOTH_CONNECT)
-        } else {
-            add(Manifest.permission.ACCESS_FINE_LOCATION)
-        }
+        addAll(BluetoothPermissions.forConnect())
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             add(Manifest.permission.POST_NOTIFICATIONS)
         }
@@ -392,6 +409,70 @@ class StatusActivity : AppCompatActivity(), ObdForegroundService.StatusListener 
                         getString(R.string.git_push_failed),
                         Toast.LENGTH_SHORT
                     ).show()
+                }
+            }
+        }
+    }
+
+    private fun hasBluetoothConnectPermission(): Boolean =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED
+        } else {
+            true
+        }
+
+    private fun showPairedDevicesDialog() {
+        if (!hasBluetoothConnectPermission()) {
+            requestPermissions.launch(BluetoothPermissions.forConnect())
+            return
+        }
+        val adapter = (getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager).adapter
+        val bonded = try {
+            adapter?.bondedDevices?.toList() ?: emptyList()
+        } catch (e: SecurityException) {
+            Mobile.logError("Failed to list bonded devices: $e")
+            emptyList()
+        }
+        if (bonded.isEmpty()) {
+            Toast.makeText(this, getString(R.string.paired_devices_none), Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        val selectedMac = Mobile.deviceMAC(filesDir.absolutePath)
+        val isConnected = latestConnectionState is ObdForegroundService.ConnectionState.Connected
+        val labels = bonded.map { device ->
+            val name = try { device.name } catch (e: SecurityException) { null } ?: device.address
+            val status = when {
+                device.address.equals(selectedMac, ignoreCase = true) && isConnected -> getString(R.string.device_status_connected)
+                device.address.equals(selectedMac, ignoreCase = true) -> getString(R.string.device_status_selected)
+                else -> getString(R.string.device_status_paired)
+            }
+            "$name (${device.address}) — $status"
+        }.toTypedArray()
+
+        AlertDialog.Builder(this)
+            .setTitle(getString(R.string.paired_devices_dialog_title))
+            .setItems(labels) { _, which ->
+                val device = bonded[which]
+                val name = try { device.name } catch (e: SecurityException) { null } ?: device.address
+                selectDevice(device.address, name)
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
+    }
+
+    private fun selectDevice(mac: String, name: String) {
+        scope.launch(Dispatchers.IO) {
+            try {
+                Mobile.setSelectedDevice(filesDir.absolutePath, mac, name)
+                runOnUiThread {
+                    boundService?.reconnectNow()
+                    Toast.makeText(this@StatusActivity, getString(R.string.device_selected, name), Toast.LENGTH_SHORT).show()
+                }
+            } catch (e: Exception) {
+                Mobile.logError("Failed to select device: $e")
+                runOnUiThread {
+                    Toast.makeText(this@StatusActivity, getString(R.string.device_select_failed), Toast.LENGTH_SHORT).show()
                 }
             }
         }

@@ -36,6 +36,11 @@
             </intent-filter>
         </activity>
 
+        <activity
+            android:name=".DeviceScanActivity"
+            android:exported="false"
+            android:label="@string/pair_devices_button" />
+
         <service
             android:name=".ObdForegroundService"
             android:exported="false"

@@ -44,4 +44,22 @@
     <string name="stop_button">Stop monitoring</string>
     <string name="start_scanning_button">Start Scanning</string>
     <string name="quit_app_button">Quit App</string>
+
+    <string name="pair_devices_button">Pair Bluetooth OBD2 Scanners</string>
+    <string name="show_paired_button">Show Paired Scanners</string>
+    <string name="device_scan_instructions">Tap a paired device to select it, or scan for nearby ones.</string>
+    <string name="device_scan_button">Scan for Devices</string>
+    <string name="device_scan_scanning">Scanning…</string>
+    <string name="device_scan_paired_section">Paired Devices</string>
+    <string name="device_scan_available_section">Nearby Devices</string>
+    <string name="device_scan_pairing">Pairing…</string>
+    <string name="device_pairing_failed">Pairing failed</string>
+    <string name="device_selected">%1$s selected</string>
+    <string name="device_select_failed">Failed to select device — check app log</string>
+    <string name="paired_devices_dialog_title">Paired Scanners</string>
+    <string name="paired_devices_none">No paired devices — use Pair Bluetooth OBD2 Scanners first</string>
+    <string name="device_status_connected">Connected</string>
+    <string name="device_status_selected">Selected</string>
+    <string name="device_status_paired">Paired</string>
+    <string name="bluetooth_permission_needed">Bluetooth permission needed to scan/pair</string>
 </resources>
