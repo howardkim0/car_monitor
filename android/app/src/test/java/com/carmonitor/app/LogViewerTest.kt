@@ -47,63 +47,42 @@ class LogViewerTest {
     @Test
     fun `readTail returns tail starting at line boundary when file is truncated`() {
         val file = File(tempDir.root, "app.log")
-        // Create a file with known content larger than maxBytes
-        val lines = mutableListOf<String>()
-        for (i in 0..100) {
-            lines.add("Line $i with some text content to make it longer\n")
-        }
-        val fullContent = lines.joinToString("")
-        file.writeText(fullContent)
+        val lines = (0..100).map { "Line $it with some text content to make it longer\n" }
+        file.writeText(lines.joinToString(""))
 
-        // Read only the last 500 bytes
-        val maxBytes = 500
-        val result = LogViewer.readTail(file, maxBytes = maxBytes)
+        val result = LogViewer.readTail(file, maxBytes = 500)
 
-        // Result should not be null (file exists and content fits in 500KB)
         assertTrue("Result should not be null", result != null)
         result!!
-
-        // Result should not start with a partial line (should start with \n or content at line boundary)
-        if (result.isNotEmpty()) {
-            // The first character should never be a fragment of UTF-8 — it should be
-            // at a line boundary. We can verify this by checking that the result
-            // either starts at a newline or that there are no newlines followed by
-            // incomplete content (i.e., if result contains multiple lines, they should
-            // all be complete).
-            val lines = result.split('\n')
-            // All lines except possibly the last (which might be incomplete due to
-            // ReadFully reading exactly the requested bytes) should be complete.
-            // Actually, our implementation skips up to and including the first newline,
-            // so the first line in result is guaranteed to be complete.
-            assertTrue("Result should contain content", result.isNotEmpty())
+        assertTrue("Result should contain complete trailing lines", result.isNotEmpty())
+        // The last line written is always fully present — a truncated tail
+        // only ever drops from the *front*, never the end of the file.
+        assertTrue("Result should end with the file's last line", result.endsWith(lines.last()))
+        // Every line in the result must be one of the original lines verbatim
+        // (ignoring the trailing empty element from the final \n) — proof
+        // no line was cut mid-way by the tail read.
+        result.split('\n').dropLast(1).forEach { line ->
+            assertTrue("'$line' should be a complete original line", lines.contains("$line\n"))
         }
     }
 
     @Test
     fun `readTail starts at line boundary, not mid-line`() {
         val file = File(tempDir.root, "app.log")
-        // Create a file with lines of known lengths
-        val line1 = "a".repeat(100) + "\n"
-        val line2 = "b".repeat(100) + "\n"
-        val line3 = "c".repeat(100) + "\n"
+        // Three 11-byte lines (33 bytes total): "aaaaaaaaaa\n", "bbbbbbbbbb\n",
+        // "cccccccccc\n". maxBytes=15 reads the last 15 bytes — byte 18
+        // onward, landing 7 bytes into line2 ("bbb\n" + all of line3) — so
+        // after discarding the partial "bbb" fragment up to its newline,
+        // the complete, untouched last line should remain.
+        val line1 = "a".repeat(10) + "\n"
+        val line2 = "b".repeat(10) + "\n"
+        val line3 = "c".repeat(10) + "\n"
         file.writeText(line1 + line2 + line3)
 
-        // Request only the last 50 bytes (which will definitely land mid-line3)
-        val result = LogViewer.readTail(file, maxBytes = 50)
+        val result = LogViewer.readTail(file, maxBytes = 15)
 
-        // Result should start at a complete line, not mid-line
-        // Since we request 50 bytes of the last 101+101+101=303 bytes, we'll read
-        // from byte 253 onward, landing in line3.
-        // After discarding up to the first \n, we should get the rest of line3.
-        assertTrue("Result should not be empty", result!!.isNotEmpty())
-
-        // Result should not contain partial UTF-8 sequences or fragments
-        // (i.e., should be decodable and start at a sensible boundary)
-        // For this test, we just check it doesn't start with a 'b' or 'a'
-        // (i.e., it skipped the mid-line fragment and started after a newline)
-        if (result.startsWith("b") || result.startsWith("a")) {
-            throw AssertionError("Result should not start with content from a previous line")
-        }
+        assertEquals("Result should be exactly the complete last line, with the " +
+            "preceding partial line discarded", line3, result)
     }
 
     @Test
