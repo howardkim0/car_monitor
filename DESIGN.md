@@ -502,6 +502,24 @@ app startup — so a log export can be matched to the exact build that
 produced it (see `docs/defects.md`). Section 5.1 covers the matching
 scan-lifecycle logging in `DeviceScanActivity`.
 
+Alongside that, `versionCode`/`versionName` (`android/app/build.gradle.kts`)
+are also derived at build time rather than hand-maintained: both come
+from `git rev-list --count HEAD` (the repo's total commit count),
+formatted as `versionName = "0.<count>"` — the `0.` prefix is
+deliberate, not a placeholder waiting to be bumped, since this app has
+no stable/1.0 release yet — with `versionCode` set to the same integer
+(Android requires a strictly-increasing integer for update ordering,
+which commit count naturally satisfies). This needs the CI checkout to
+fetch full history (`fetch-depth: 0` in `release-apk.yml`) — unlike
+`GIT_COMMIT` above, which only needs the current commit and works fine
+on the default shallow checkout, a commit *count* is meaningless
+without the full log. Falls back to `versionCode = 1`,
+`versionName = "0.1"` if git isn't available at all. `StatusActivity`
+displays `versionName` in a small label on the status screen — this is
+the version a driver would actually see and report, distinct from
+`GIT_COMMIT` above (which is for matching a specific `app.log` export
+to a build, not for at-a-glance display).
+
 A **"View App Logs"** button (`LogViewerActivity`) reads `app.log`
 directly for in-app viewing, without needing `adb`, a file manager, or
 the git-backup path (section 7) to be reachable at all — the intended
