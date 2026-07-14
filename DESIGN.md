@@ -127,7 +127,7 @@ Kotlin-only rather than round-tripping through Go.
    ELM327 link and is skipped without logging.
 5. `internal/obd2` decides *which* PIDs to request (profile + discovery,
    section 5.2); Kotlin still decides polling cadence via a plain
-   constant (section 12). Before requesting any PID, `writeLoop` sends a
+   constant (`docs/open-questions.md`). Before requesting any PID, `writeLoop` sends a
    fixed ELM327 setup sequence once per connection —
    `obd2.InitCommands()` (`ATE0 ATL0 ATS1 ATH0 ATSP0`), exposed to
    Kotlin the same two-call way as `Commands()`/`CommandAt(i)`. Adapter
@@ -276,8 +276,8 @@ switches to the real per-PID list once the ECU's bitmask resolves which
 are supported — or after a 5s timeout, falling back to requesting
 everything. Go owns the entire phase transition; Kotlin's `writeLoop()`
 just keeps polling `Commands()` blindly. Only covers Mode 01 (the only
-mode this app requests, section 12) — a future mode would need its own
-discovery handling.
+mode this app requests) — a future mode would need its own discovery
+handling.
 
 Same extensibility pattern as devices: one hardcoded `Default()` today,
 but the rest of the app only talks to `vehicle.Profile`. A second car is
@@ -289,7 +289,7 @@ profiles are editable without a rebuild; not needed for v1.
 
 `device.Default()` is runtime-overridable via 5.1's persisted-selection
 mechanism. `vehicle.Default()` is still a hardcoded function with no
-config file or UI (section 12) — the interface exists so swapping it out
+config file or UI (`docs/open-questions.md`) — the interface exists so swapping it out
 later (env var, JSON asset, extending the device-picker UI) is a
 localized change.
 
@@ -363,7 +363,7 @@ feature not working.
 That same native-library-on-first-touch behavior is why every
 `Mobile.*` call from an Activity is dispatched off the main thread —
 via `scope.launch(Dispatchers.IO) { ... }` — rather than called inline.
-Under Robolectric (plain-JVM unit tests, section 13) there's no native
+Under Robolectric (plain-JVM unit tests, `docs/dev-setup.md`) there's no native
 `libgojni.so` to load at all, so a synchronous `Mobile.*` call reached
 during `onCreate()` throws `UnsatisfiedLinkError` and fails the test
 outright. `StatusActivity` and `DeviceScanActivity` both follow this
@@ -508,7 +508,7 @@ register it as a GitHub deploy key without `adb`.
 - `ACCESS_FINE_LOCATION` (still required by some OEMs for classic
   Bluetooth on API < 31) — on API 26-30 there's no
   `neverForLocation`-equivalent exemption at all (`minSdk` is 26,
-  section 11); `DeviceScanActivity` checks
+  `docs/dev-setup.md`); `DeviceScanActivity` checks
   `LocationManager.isLocationEnabled()` directly on these versions
   instead.
 - `FOREGROUND_SERVICE` and `FOREGROUND_SERVICE_CONNECTED_DEVICE` (API 34+).
@@ -539,6 +539,10 @@ car_monitor/
 ├── android/                  # Android Studio / Gradle project
 │   └── app/
 │       └── src/main/java/.../ObdForegroundService.kt
+├── docs/
+│   ├── dev-setup.md          # local build prerequisites, build steps, testing tooling
+│   ├── defects.md            # log of past bugs: symptom, root cause, fix
+│   └── open-questions.md     # known gaps/future work, mirrored as GitHub issues
 └── scripts/
     └── setup_ubuntu.sh       # installs/maintains all local build prereqs
 ```
@@ -546,185 +550,13 @@ car_monitor/
 `go/` (including `mobile/`) and `android/` are both implemented, matching
 this layout.
 
-## 10. Local build prerequisites (Ubuntu)
+## 10. Testing philosophy
 
-All of the following are installed and kept up to date by
-[`scripts/setup_ubuntu.sh`](scripts/setup_ubuntu.sh) rather than manual
-steps, so a fresh Ubuntu box (or CI runner) can be brought to a working
-build environment with one command.
-
-| Tool | Why it's needed | Version pinned by script |
-|---|---|---|
-| Go | All app logic; also builds `gomobile`/`gobind` | 1.26.5 |
-| OpenJDK 17 | Required by the Android Gradle Plugin | 17 (Temurin) |
-| Android `cmdline-tools` + `sdkmanager` | Pulls SDK platform, build-tools, NDK | latest `cmdline-tools` |
-| Android SDK Platform | Compile target | `android-34` |
-| Android Build-Tools | `aapt`/`d8`/etc. | `34.0.0` |
-| Android NDK | `gomobile bind` cross-compiles Go with cgo enabled (JNI bridge), which needs NDK's clang toolchains | `26.1.10909125` |
-| `platform-tools` (adb) | Deploying/debugging on a device | latest |
-| `gomobile` / `gobind` | Builds the Go code into an Android `.aar` | `golang.org/x/mobile@latest` |
-| Android Studio | Optional, full IDE tooling. **Not required** to build — Gradle CLI + `sdkmanager` suffice — but installed by default for convenience | latest stable, via JetBrains' official archive |
-
-Notes:
-- Everything installs under the invoking user's home directory
-  (`~/Android/sdk`, `~/go`, `/opt/android-studio`), using its own pinned
-  JDK/Go rather than the distro's.
-- Idempotent: re-running skips anything already at the pinned version,
-  patches `~/.bashrc`/`~/.profile` only once.
-- `SKIP_ANDROID_STUDIO=1 ./scripts/setup_ubuntu.sh` skips the IDE for
-  headless/CI boxes.
-
-## 11. Build steps (after running the setup script)
-
-```sh
-# 1. Build the Go core into an Android AAR
-cd go/mobile
-gomobile bind -androidapi 26 -o ../../android/app/libs/mobile.aar -target=android ./...
-
-# 2. Build the Android app
-cd ../../android
-./gradlew assembleDebug
-
-# 3. Install on a connected/USB-debugging device
-adb install -r app/build/outputs/apk/debug/app-debug.apk
-```
-
-`gofmt`, `go vet`, `go test ./...`, and `go build ./...` for `go/` run
-automatically on every commit via `githooks/pre-commit` (see
-`CLAUDE.md`). The `gomobile bind`/`gradlew` steps aren't part of that
-hook — they need the Android SDK/NDK and are slow — so run them manually
-whenever a change touches `android/` or `mobile`'s exported surface.
-
-`-androidapi 26` matches `build.gradle.kts`'s `minSdk`; without it,
-`gomobile bind` defaults to API 16, which NDK 26 no longer supports —
-the bind step fails immediately with "unsupported API version 16 (not
-in 21..34)".
-
-Measured with the SDK/NDK/`gomobile` already installed: `gomobile bind`
-~10s; `gradlew assembleDebug` ~1.5min on a clean checkout, ~10s warm.
-
-### Pre-built APK
-
-A debug-signed APK is published to this repo's [GitHub
-Releases](../../releases) page under a single rolling `latest`
-release/tag, built by `.github/workflows/release-apk.yml` on every push
-to `main` touching `android/**` or `go/**`:
-
-```sh
-gh release download latest -p 'car-monitor-debug.apk' -R howardkim0/car_monitor
-adb install -r car-monitor-debug.apk
-```
-
-(or download from the release page and `adb install -r`/tap it
-on-device). The workflow deletes and recreates `latest` every run, so it
-always reflects current `main` — no version history beyond `git log`.
-
-Build outputs are gitignored (regenerable from source) rather than
-committed, so `.git` doesn't grow by the APK's size on every change.
-
-**Signing.** The build stays the `debug` build type, but
-`android/app/build.gradle.kts` gives it a stable signing key when four
-`CM_RELEASE_*` env vars are present (`release-apk.yml` sets these from
-repo secrets — `RELEASE_KEYSTORE_BASE64`, `RELEASE_KEYSTORE_PASSWORD`,
-`RELEASE_KEY_ALIAS`, `RELEASE_KEY_PASSWORD` — decoding the keystore to a
-`RUNNER_TEMP` path, never into the repo). Without those secrets, it falls back to CI's ephemeral
-per-runner `debug.keystore`. This matters because Android refuses to
-install an APK over an existing app unless signatures match, and a
-fresh ephemeral keystore per CI runner would otherwise mean every
-`latest` release needs a manual uninstall to update. A local
-`./gradlew assembleDebug` is unaffected either way (uses that machine's
-own persistent debug keystore). See `docs/defects.md`.
-
-One migration note: a phone with a build installed *before* the CI
-secrets were configured needs one manual uninstall; every release after
-that shares the same key and installs as a normal update. The keystore
-itself is GitHub-secrets-only, never committed (`.gitignore`'s
-`*.keystore`/`*.jks` rules) — leaking it would let anyone produce an APK
-Android treats as a legitimate update to this app.
-
-## 12. Open questions / future work
-
-- Vehicle selection (unlike device selection, resolved in section 5.1)
-  is still hardcoded to `vehicle.Default()`. A bundled JSON asset, or
-  extending the device-picker UI, are both additive given section 5's
-  interfaces.
-- DTC (fault code) reading/clearing is out of scope for v1 but fits the
-  same PID-request pattern in `internal/obd2`.
-- `obd2.InitCommands()` (section 4 step 5) sends five explicit `AT`
-  commands instead of a full `ATZ` reset, on standard ELM327 semantics —
-  unverified against real/clone hardware in this dev environment (no
-  Bluetooth device access). Some cheap clones are known to need a reset
-  for `ATSP0` to fully re-trigger protocol auto-search; `ATZ` is the
-  fallback if the zero-readings symptom recurs on real hardware.
-- Long-term storage growth: day-rotated CSV (section 6.1) is fine for
-  now; revisit with a pure-Go SQLite driver (e.g. `ncruces/go-sqlite3`,
-  avoiding cgo/NDK complexity) if per-file size or cross-day queries
-  grow.
-- Polling cadence still lives as constants (`COMMAND_INTERVAL_MS`/
-  `POLL_CYCLE_MS`) in `ObdForegroundService`, not Go — *which* PIDs to
-  request is decided in Go (section 5.2's discovery), but *how often*
-  isn't yet, since `Session` exposes no timing info.
-- `COMMAND_INTERVAL_MS` is 200ms (raised from 50ms to be gentler on the
-  adapter) — at 200ms/command × 32 PIDs plus 250ms `POLL_CYCLE_MS`, one
-  full poll cycle is ~6.65s. Diagnostic logs
-  (`writeLoop` cycle timing every ~9 cycles, `readLoop` bytes every 100
-  reads, Go's discovery-range resolution) land in `app.log` to verify
-  this against real hardware and tune if needed.
-- Those diagnostics cover *timing*, not *content* — `obd2.Session.Feed`
-  also logs the raw content of the first 20 lines each session (quoted,
-  so whitespace/header differences are visible) and a running
-  received/decoded count every 100 lines, plus each `InitCommands()`
-  step as it's sent, so a future zero-readings session shows *what the
-  adapter actually said* rather than just that nothing decoded.
-- `mobile.Session.CommandCount()`/`CommandAt(i)` are two separate JNI
-  calls, not one atomic snapshot — `Commands()` changing mid-flight
-  (discovery resolving) could in principle produce a stale index between
-  them. Accepted as low-severity: self-heals on the next poll cycle, not
-  worth the "return the whole list" JNI redesign it'd take to fix.
-- `Session.CheckAnomalies`'s per-metric dedup state (`lastLevel`) is
-  scoped to the `Session`, not persisted across reconnects, so an
-  occasional duplicate notification around a reconnect is possible.
-  Accepted for the same reason as above — not worth the added
-  package-level shared-state complexity for a cosmetic edge case.
-- Only a metric moving to Warning/Critical notifies; there's no
-  "recovered to Normal" notification. Deliberately out of scope for v1,
-  worth revisiting.
-- `internal/monitor`'s metric-name constants are matched against
-  `vehicle.go`'s `PID.Name` fields by exact string equality, with no
-  compiler-enforced link — `TestMetricNamesMatchVehicleProfile` guards
-  against silent drift, but a shared source of truth would remove the
-  possibility structurally.
-- Trend/anomaly detection (section 4 step 6) re-reads and re-parses
-  *today's entire* CSV log on every check, even though each
-  `internal/trend` check only looks at the last 30s-5min of it —
-  acceptable for now (parsing is still fast in absolute terms, and the
-  check interval is deliberately coarse), but a full-day drive means
-  paying that cost against a steadily growing file. If this becomes
-  measurably expensive, the fix is incremental — track a byte offset and
-  keep a small in-memory sliding window per metric, not re-architecting
-  the check functions.
-
-## 13. Testing
-
-**`go/`**: table-driven `testing` package tests, one file per source
-file. `githooks/pre-commit` enforces both passing tests and a 100%
-statement coverage floor (see `CLAUDE.md`). `.github/workflows/coverage.yml`
-re-runs the same check on push/PR and emails on any regression below
-100% — a safety net for a bypassed local hook or fresh clone, not the
-primary gate.
-
-**`android/`**: JUnit4 + [Robolectric](http://robolectric.org/) (Android
-framework on the plain JVM — no emulator/KVM needed) +
-[MockK](https://mockk.io/) for collaborators Robolectric doesn't
-simulate well (`BluetoothSocket`). Tests live in
-`android/app/src/test/java/com/carmonitor/app/`, run via `./gradlew
-testDebugUnitTest`. Coroutines run against real `Dispatchers.IO` rather
-than `kotlinx-coroutines-test`'s virtual time — no injectable-dispatcher
-seam exists yet; revisit if that stops being cheap enough.
-`ObdForegroundService.connectionJob`/`connectSocket()`/`ACTION_STOP`/
-`ACTION_QUIT` and `StatusActivity.isBound` are `internal` +
-`@VisibleForTesting` rather than `private` so regression tests can
-observe them directly.
+Build prerequisites, build steps, and testing tooling (Robolectric,
+MockK, coverage commands) live in [`docs/dev-setup.md`](docs/dev-setup.md)
+— none of that is needed to understand the app's architecture, only to
+build/test it locally. Two decisions belong here instead, since they're
+relevant to every commit, not just local setup:
 
 **Coverage parity between `go/` and `android/` is a deliberate
 non-goal.** `go/` reaching enforced 100% is straightforward (pure logic,
@@ -735,8 +567,8 @@ undertaking. `android/` tests target regression coverage for bugs
 actually found, not a percentage. CI reports Android coverage (Kover) as
 a build artifact; it isn't gated.
 
-Regression tests exist for bugs actually found during development, per
-`CLAUDE.md`'s "every caught bug gets a regression test" — see
+**Regression tests exist for bugs actually found during development**,
+per `CLAUDE.md`'s "every caught bug gets a regression test" — see
 `docs/defects.md` for what each bug was and why. `ACTION_QUIT` is
 deliberately not exercised through an automated test — its handler ends
 in `Process.killProcess(Process.myPid())`, which would kill the test JVM
@@ -744,3 +576,4 @@ itself, and there's no Robolectric shadow worth trusting there. It
 shares `ACTION_STOP`'s exact `stopServiceImmediately()` call, which that
 test already covers; the kill call itself is one line, checked by
 direct code review.
+

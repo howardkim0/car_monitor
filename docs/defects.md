@@ -40,7 +40,7 @@ Follow-up (`b8c9f11`): since a decode failure at this layer is silent
 by design (expected noise), the only way to diagnose a repeat of this
 class of bug is seeing what the adapter actually sent — added raw
 first-20-lines-per-session logging and a running received/decoded
-count. See `DESIGN.md` section 12.
+count. See `docs/open-questions.md`.
 
 ## Bluetooth device scanning / pairing
 
@@ -205,6 +205,23 @@ re-requesting permissions) would launch a second, concurrent
 `connectionJob` rather than being a no-op — fixed by checking
 `connectionJob?.isActive` before launching a new one.
 
+## Status screen UI
+
+**The version label (and the last few buttons before it) were
+invisible off-screen** (`1ebb44c`). Symptom: "the version number
+doesn't show on the app," reported right after the version-label
+feature shipped. Root cause: the status screen's button column was a
+plain `LinearLayout` with no `ScrollView` — `statusText` +
+`readingsText` + 10 action buttons overflows the visible area on any
+real phone screen, with no way to scroll to whatever fell past the
+fold. The version label, appended last, was simply the first symptom
+to get reported; `Quit`/`Stop` and other trailing buttons were equally
+unreachable on smaller screens, just less likely to be needed in a
+quick glance. Fix: wrapped the whole screen in a `ScrollView`;
+`readingsText` no longer needs `layout_weight="1"` to compete with the
+buttons for space, which also stops it from being silently clipped if
+the reading list itself runs long. See `DESIGN.md` section 3.
+
 ## Android build / release
 
 **CI-built debug APKs couldn't be installed over a previous install**
@@ -213,4 +230,4 @@ per-runner, so consecutive `latest` releases carried different
 signatures and Android refused the in-place update (only a full
 uninstall/reinstall worked). Fix: a persistent signing key, stored as
 GitHub repo secrets and decoded to a runner-temp path at build time,
-never committed. See `DESIGN.md` section 11's "Signing" subsection.
+never committed. See `docs/dev-setup.md`'s "Signing" subsection.

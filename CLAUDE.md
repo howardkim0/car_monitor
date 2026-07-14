@@ -108,7 +108,20 @@ Lowering the floor requires changing `MIN_COVERAGE` in the same commit
 and saying why.
 
 `android/` (JUnit + Robolectric + MockK, `./gradlew testDebugUnitTest`,
-Kover for coverage) isn't held to 100% — see DESIGN.md §13 — and targets
+Kover for coverage) isn't held to 100% — see DESIGN.md §10 — and targets
 real regressions, not a percentage. Full Android/APK compilation is
 deliberately not part of the pre-commit hook; run it manually per
-DESIGN.md §11 when touching `android/` or `mobile`'s exported surface.
+`docs/dev-setup.md` when touching `android/` or `mobile`'s exported
+surface.
+
+## Build/test setup and open questions live in docs/
+
+`docs/dev-setup.md` (local build prerequisites, build steps, testing
+tooling) and `docs/open-questions.md` (known gaps and future work, each
+mirrored as a GitHub issue) are both split out of `DESIGN.md` — update
+the matching doc in the same change whenever build steps change (new
+prerequisite, changed command, CI workflow adjustment) or a TODO is
+added or addressed. For `docs/open-questions.md` specifically: adding an
+item means also filing a GitHub issue and linking it from the doc;
+resolving one means closing the issue and removing (or checking off) the
+doc entry — the doc and the issue tracker should never drift apart.

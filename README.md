@@ -27,9 +27,8 @@ adb install -r car-monitor-debug.apk
 ```
 
 Or download `car-monitor-debug.apk` from the [Releases
-page](../../releases) directly and install it on-device. See [DESIGN.md
-§11](DESIGN.md#11-build-steps-after-running-the-setup-script) for signing
-details.
+page](../../releases) directly and install it on-device. See
+[docs/dev-setup.md](docs/dev-setup.md) for signing details.
 
 ## Build from source
 
@@ -45,8 +44,8 @@ cd ../../android && ./gradlew assembleDebug
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
 
-See [DESIGN.md §10–11](DESIGN.md#10-local-build-prerequisites-ubuntu) for
-what each prerequisite is for and why the build is split this way.
+See [docs/dev-setup.md](docs/dev-setup.md) for what each prerequisite is
+for and why the build is split this way.
 
 Once installed, the app connects to a hardcoded ELM327 dongle MAC address
 and vehicle profile (v1 targets a 2023 Subaru Forester) — see [DESIGN.md
@@ -61,7 +60,9 @@ prompted, or background monitoring will be killed by Android after a while.
   100%-enforced test coverage floor.
 - `android/` — the Kotlin shell: Bluetooth I/O, the foreground service,
   permissions, and the single status screen.
-- `docs/` — implementation plans for non-trivial features (`plan-*.md`),
+- `docs/` — local build/test setup (`dev-setup.md`), a log of past bugs
+  (`defects.md`), tracked future work (`open-questions.md`),
+  implementation plans for non-trivial features (`plan-*.md`),
   screenshots, and the CI-generated coverage badge.
 - `scripts/setup_ubuntu.sh` — installs/updates the full local build
   toolchain.
@@ -76,5 +77,7 @@ design-doc-first changes, regression tests for every bug fix, and the
 two-persona review this codebase is held to.
 
 Android tests run separately via `./gradlew testDebugUnitTest` (JUnit +
-Robolectric + MockK); see [DESIGN.md §13](DESIGN.md#13-testing) for why
-`android/` isn't held to the same 100% coverage bar as `go/`.
+Robolectric + MockK); see [DESIGN.md
+§10](DESIGN.md#10-testing-philosophy) for why `android/` isn't held to
+the same 100% coverage bar as `go/`, and
+[docs/dev-setup.md](docs/dev-setup.md) for the tooling itself.
