@@ -58,7 +58,7 @@ The practical split, and what this doc assumes:
   a single status Activity (connected/disconnected, last readings). Its
   action buttons (battery-optimization exemption, export logs, copy SSH
   public key, test alert, git push, pair Bluetooth OBD2 scanners, show
-  paired scanners, stop/start scanning, quit) are a single full-width,
+  paired devices, stop/start scanning, quit) are a single full-width,
   vertically stacked column, not a grid — label lengths vary enough (a
   two-line "Copy SSH Public Key" next to a one-line "Quit App") that a
   multi-column layout doesn't stay aligned, exactly the misalignment the
@@ -244,11 +244,27 @@ is Android framework ceremony, not business logic):
   `BluetoothAdapter.startDiscovery()` for nearby *unpaired* ones —
   tapping one calls `BluetoothDevice.createBond()` (Android's own system
   pairing dialog handles the PIN exchange; this app never implements
-  pairing itself) and selects it once bonding completes.
-- **"Show Paired Scanners"** is a lighter-weight `AlertDialog` on the
+  pairing itself) and selects it once bonding completes. The scan button
+  is a toggle, not a one-shot trigger: tapping it again while a scan is
+  running calls `BluetoothAdapter.cancelDiscovery()` immediately, rather
+  than only waiting out Android's own ~12s discovery timeout; its label
+  reflects which state it's in. `startDiscovery()`'s boolean return value
+  is also checked now — it can return `false` (adapter disabled,
+  discovery already running) without throwing, which previously left the
+  button stuck showing "Scanning…" forever with no scan actually
+  running and no way out except leaving the screen. A `SecurityException`
+  from a denied permission (starting a scan, listing bonded devices,
+  reading a device's name) surfaces as a visible status message too, not
+  just a log line — a silent failure here was indistinguishable from "no
+  devices nearby." Both were real contributors to a "the scan button
+  doesn't seem to do anything" report; section 8's `neverForLocation` fix
+  is the most likely primary cause, though not independently confirmed
+  against that specific device's Location Services state.
+- **"Show Paired Devices"** is a lighter-weight `AlertDialog` on the
   status screen (no new Activity — it only needs `getBondedDevices()`,
   not the ongoing discovery lifecycle a full scan needs) listing every
-  bonded device with a status per row: `Connected`, `Selected` (the next
+  device the phone has ever paired with (not just ones this app
+  discovered), each with a status: `Connected`, `Selected` (the next
   connection attempt will use it, but it isn't connected right now), or
   plain `Paired`. Lets a driver switch between two dongles the phone
   already knows about without re-scanning.
@@ -615,7 +631,19 @@ needing `adb`.
   already-selected, already-paired MAC, only to discover new ones — note
   the Android shell must not call any SCAN-gated API (e.g.
   `BluetoothAdapter.cancelDiscovery()`) without also requesting this at
-  runtime first, or the call fails with `SecurityException` on API 31+
+  runtime first, or the call fails with `SecurityException` on API 31+.
+  Declared with `android:usesPermissionFlags="neverForLocation"` (this
+  app never derives location from scan results) — without that flag,
+  Android additionally requires the *system* Location Services toggle to
+  be on for discovery to return any results at all on API 31+, silently
+  (no error, no exception — `startDiscovery()` just never finds
+  anything). This is the most likely primary cause of a real "the pair
+  button doesn't seem to scan" report (not independently confirmed
+  against that specific device's Location Services state, since that's
+  not observable from app logs) — section 5.1 also covers two smaller,
+  independently-real contributors found in the same investigation
+  (an unchecked `startDiscovery()` return value, and permission
+  failures that were silent in the UI).
 - `ACCESS_FINE_LOCATION` (still required by some OEMs for classic
   Bluetooth on API < 31)
 - `FOREGROUND_SERVICE` and `FOREGROUND_SERVICE_CONNECTED_DEVICE` (API 34+)
