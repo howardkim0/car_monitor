@@ -41,6 +41,11 @@
             android:exported="false"
             android:label="@string/pair_devices_button" />
 
+        <activity
+            android:name=".LogViewerActivity"
+            android:exported="false"
+            android:label="@string/view_logs_button" />
+
         <service
             android:name=".ObdForegroundService"
             android:exported="false"

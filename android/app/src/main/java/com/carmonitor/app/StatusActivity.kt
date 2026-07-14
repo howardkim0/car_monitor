@@ -48,6 +48,7 @@ class StatusActivity : AppCompatActivity(), ObdForegroundService.StatusListener 
     private lateinit var readingsText: TextView
     private lateinit var batteryOptimizationButton: Button
     private lateinit var exportButton: Button
+    private lateinit var viewLogsButton: Button
     private lateinit var copySshKeyButton: Button
     private lateinit var testAlertButton: Button
     private lateinit var gitPushButton: Button
@@ -132,6 +133,8 @@ class StatusActivity : AppCompatActivity(), ObdForegroundService.StatusListener 
         batteryOptimizationButton.setOnClickListener { requestBatteryOptimizationExemption() }
         exportButton = findViewById(R.id.exportButton)
         exportButton.setOnClickListener { exportLogs() }
+        viewLogsButton = findViewById(R.id.viewLogsButton)
+        viewLogsButton.setOnClickListener { startActivity(Intent(this, LogViewerActivity::class.java)) }
         copySshKeyButton = findViewById(R.id.copySshKeyButton)
         copySshKeyButton.isEnabled = false
         copySshKeyButton.setOnClickListener { copySshKeyToClipboard() }

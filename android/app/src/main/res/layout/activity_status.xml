@@ -35,6 +35,13 @@
         android:text="@string/export_logs_button" />
 
     <Button
+        android:id="@+id/viewLogsButton"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:text="@string/view_logs_button" />
+
+    <Button
         android:id="@+id/copySshKeyButton"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
