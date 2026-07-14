@@ -72,6 +72,31 @@ class StatusActivityTest {
         )
     }
 
+    // Regression test: the button column used to be a plain LinearLayout
+    // with no way to scroll, so on a real phone screen the last few
+    // buttons and the version label past them were pushed off-screen
+    // entirely with no way to reach them — reported as "the version
+    // number doesn't show on the app." Walking up from versionText's
+    // parent chain and requiring a ScrollView somewhere in it directly
+    // encodes the fix, so a future layout change can't silently drop it.
+    @Test
+    fun `versionText is reachable inside a ScrollView`() {
+        val activity = newActivity()
+        val versionText = activity.findViewById<android.widget.TextView>(R.id.versionText)
+
+        var parent = versionText.parent
+        var foundScrollView = false
+        while (parent != null) {
+            if (parent is android.widget.ScrollView) {
+                foundScrollView = true
+                break
+            }
+            parent = (parent as? android.view.View)?.parent
+        }
+
+        assertTrue("versionText must be inside a ScrollView so it's reachable on any screen size", foundScrollView)
+    }
+
     @Test
     fun `a terminal TimedOut state also unbinds`() {
         val activity = newActivity()
