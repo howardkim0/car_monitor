@@ -7,6 +7,14 @@ architecture (Go core in `go/`, thin Kotlin shell in `android/`) and the
 `internal/device`/`internal/vehicle` extensibility points. Update it in
 the same change if code diverges from what it says.
 
+## Check car_monitor_logs before investigating device defects
+
+Real app logs/readings push automatically to
+[car_monitor_logs](https://github.com/howardkim0/car_monitor_logs/tree/master)
+(DESIGN.md section 7's git-backup feature). Before asking the user to
+export logs manually, check that repo for the latest `app.log`/
+`readings-*.csv` — it may already have what's needed.
+
 ## DESIGN.md is timeless
 
 It describes the app as it exists now, not a changelog of any session,
