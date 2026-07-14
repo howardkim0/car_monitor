@@ -145,10 +145,13 @@ class DeviceScanActivity : AppCompatActivity() {
             adapter.startDiscovery()
         } catch (e: SecurityException) {
             Mobile.logError("Failed to start discovery: $e")
-            Toast.makeText(this, getString(R.string.device_scan_start_failed), Toast.LENGTH_SHORT).show()
             false
         }
         if (!started) {
+            // Single Toast for both failure modes — a denied permission
+            // (caught above, mapped to false) and startDiscovery() itself
+            // returning false (adapter disabled, discovery already
+            // running) are both "couldn't start," no need to tell them apart.
             Toast.makeText(this, getString(R.string.device_scan_start_failed), Toast.LENGTH_SHORT).show()
             return
         }
