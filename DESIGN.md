@@ -56,11 +56,11 @@ The practical split, and what this doc assumes:
   out. Also owns permissions, the persistent notification, boot-start, and
   a single status Activity (connected/disconnected, last readings). Its
   action buttons (battery-optimization exemption, export logs, copy SSH
-  public key, stop/start scanning, quit) are a single full-width, vertically
-  stacked column, not a grid — label lengths vary enough (a two-line "Copy
-  SSH Public Key" next to a one-line "Quit App") that a multi-column layout
-  doesn't stay aligned, exactly the misalignment the previous row-based
-  layout had in practice.
+  public key, test alert, git push, stop/start scanning, quit) are a single
+  full-width, vertically stacked column, not a grid — label lengths vary
+  enough (a two-line "Copy SSH Public Key" next to a one-line "Quit App")
+  that a multi-column layout doesn't stay aligned, exactly the
+  misalignment the previous row-based layout had in practice.
 
 Go stays the place where all the interesting logic and all the tests live;
 Kotlin is intentionally kept dumb (I/O plumbing + Android ceremony). For example,
@@ -331,6 +331,17 @@ travels. This is specifically so a future "give me Tuesday's drive"
 analysis is just picking a file, not filtering timestamps out of a
 single ever-growing log.
 
+UTC matters concretely for a car, not just in principle: a drive can
+cross timezone boundaries (or a daylight-saving transition) mid-session,
+and the phone's local clock/zone can shift under the app without any
+readings actually stopping. Local timestamps would make that shift look
+like a rotation event mid-file (or, worse, a clock going *backward*,
+e.g. crossing from Mountain to Pacific time), even though nothing about
+the drive changed. UTC has no such boundary to cross — `applog`'s
+timestamps (section 6.2) are UTC for the identical reason, so both logs
+stay correlatable by timestamp regardless of where the trip started or
+ended.
+
 Rotation is checked on every `Append` call, keyed off the *reading's own*
 timestamp rather than wall-clock-at-write-time: if it falls on a
 different UTC day than the currently-open file, the old file is closed
@@ -492,6 +503,24 @@ needing `adb`.
   existing coroutine scope rather than introducing a second background-execution
   model like `WorkManager` — same "single mechanism, not two" rationale as
   `RECEIVE_BOOT_COMPLETED` reusing the Service rather than a separate receiver.
+  Checked every `GIT_BACKUP_CHECK_INTERVAL_MS` (5 minutes) — `gitbackup.Syncer`'s
+  own `syncInterval` is also 5 minutes, so in practice a push is attempted
+  every check, not just on a new log file. A failed push (no signal — the
+  motivating case is a drive through mountains with no cell service) is
+  never allowed to block anything: it's caught, logged via
+  `Mobile.logError`, and simply retried at the next 5-minute check, same
+  as any other check-cycle failure; `lastSynced` is only advanced on a
+  *successful* push, so a string of failures doesn't push the retry
+  further out. The network calls themselves (`PlainCloneContext`/
+  `PushContext`) are bounded by a short timeout rather than left to hang
+  on a half-open connection, so a bad-signal attempt fails fast instead of
+  occupying the loop until the next check would otherwise have fired.
+  A **"Git Push" button** on the status screen (`Mobile.forceSyncLogs`,
+  wrapping a new `Syncer.SyncNow` that shares `SyncIfNeeded`'s
+  clone/copy/commit/push logic but skips its gate check) triggers an
+  immediate, ungated push — for a driver who wants to confirm backup is
+  working right
+  now rather than wait for the next automatic check.
 
 ## 8. Permissions
 
@@ -705,6 +734,23 @@ as a legitimate update to this app, so it's kept out of the repo entirely
   Read these from `adb shell cat /data/data/com.carmonitor.app/files/app.log`
   after a short drive to tune the interval up or down based on real ELM327
   behavior.
+- The diagnostics above cover *timing* but not *content* — they couldn't
+  distinguish "the adapter sent nothing" from "the adapter sent something
+  the parser doesn't recognize," which is exactly what made a real
+  zero-readings session (all polling on schedule, zero decode errors,
+  because unrecognized lines are silently treated as expected noise —
+  see `parseResponseBytes`'s doc comment) hard to diagnose from logs
+  alone. `obd2.Session.Feed` now logs the raw content of the first 20
+  lines received each session (quoted, via `%q`, so whitespace/formatting
+  differences like missing spaces or an unexpected header field are
+  directly visible) and a running `N lines received, M decoded as
+  readings` count every 100 lines — so a future session with real polling
+  but no data shows *what the adapter actually said*, not just that
+  nothing was decoded. `writeLoop` also logs each `InitCommands()` setup
+  command as it's sent (section 4 step 5) and a confirmation once the
+  sequence completes, to make it directly visible from the app log that
+  adapter setup ran at all, rather than inferring it from an absence of
+  the zero-readings symptom.
 - `mobile.Session.CommandCount()`/`CommandAt(i)` are two separate JNI
   calls, not one atomic snapshot. Now that `Commands()` can change
   mid-flight (discovery resolving between the two calls), Kotlin's
