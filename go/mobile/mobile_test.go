@@ -281,8 +281,39 @@ func TestCheckAnomaliesLogsLoadReadingsErrors(t *testing.T) {
 }
 
 func TestDeviceMAC(t *testing.T) {
-	if got := DeviceMAC(); got != "00:1D:A5:68:98:8A" {
-		t.Errorf("DeviceMAC() = %q, want the hardcoded garage adapter MAC", got)
+	if got := DeviceMAC(t.TempDir()); got != "00:1D:A5:68:98:8A" {
+		t.Errorf("DeviceMAC(t.TempDir()) = %q, want the hardcoded garage adapter MAC", got)
+	}
+}
+
+func TestDeviceMACReturnsSelectedDeviceAfterSetSelectedDevice(t *testing.T) {
+	dir := t.TempDir()
+	mac := "AA:BB:CC:DD:EE:FF"
+	devName := "Test Device"
+	if err := SetSelectedDevice(dir, mac, devName); err != nil {
+		t.Fatalf("SetSelectedDevice: %v", err)
+	}
+	if got := DeviceMAC(dir); got != mac {
+		t.Errorf("DeviceMAC(dir) after SetSelectedDevice = %q, want %q", got, mac)
+	}
+}
+
+func TestSelectedDeviceNameReturnsDefaultWhenNothingSelected(t *testing.T) {
+	dir := t.TempDir()
+	if got := SelectedDeviceName(dir); got != "Garage OBDLink" {
+		t.Errorf("SelectedDeviceName(t.TempDir()) = %q, want the hardcoded default name", got)
+	}
+}
+
+func TestSelectedDeviceNameReturnsSelectedDeviceAfterSetSelectedDevice(t *testing.T) {
+	dir := t.TempDir()
+	mac := "AA:BB:CC:DD:EE:FF"
+	devName := "My Custom Device"
+	if err := SetSelectedDevice(dir, mac, devName); err != nil {
+		t.Fatalf("SetSelectedDevice: %v", err)
+	}
+	if got := SelectedDeviceName(dir); got != devName {
+		t.Errorf("SelectedDeviceName(dir) after SetSelectedDevice = %q, want %q", got, devName)
 	}
 }
 

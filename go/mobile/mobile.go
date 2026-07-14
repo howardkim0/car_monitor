@@ -180,10 +180,26 @@ func (s *Session) Close() error {
 	return s.store.Close()
 }
 
-// DeviceMAC returns the hardcoded Bluetooth MAC address the Android shell
-// should connect to.
-func DeviceMAC() string {
-	return device.Default().MACAddress
+// DeviceMAC returns the Bluetooth MAC address the Android shell should
+// connect to — the user-selected device if one has been chosen (see
+// SetSelectedDevice), else the hardcoded fallback.
+func DeviceMAC(storageDir string) string {
+	return device.SelectedOrDefault(storageDir).MACAddress
+}
+
+// SetSelectedDevice persists mac/name as the device DeviceMAC returns
+// from now on, overriding the hardcoded fallback — called after the
+// user pairs or picks a device via the status screen's device-picker
+// UI (DESIGN.md section 5.1).
+func SetSelectedDevice(storageDir, mac, name string) error {
+	return device.SaveSelected(storageDir, mac, name)
+}
+
+// SelectedDeviceName returns the display name of the currently
+// active device profile (user-selected if present, else the
+// hardcoded fallback's name) — for UI display.
+func SelectedDeviceName(storageDir string) string {
+	return device.SelectedOrDefault(storageDir).Name
 }
 
 // InitCommandCount returns how many ELM327 setup commands
