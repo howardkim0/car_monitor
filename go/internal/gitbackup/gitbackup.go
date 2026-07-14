@@ -18,6 +18,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/go-git/go-git/v5/plumbing/transport"
 	"github.com/go-git/go-git/v5/plumbing/transport/ssh"
+	cryptossh "golang.org/x/crypto/ssh"
 )
 
 var remoteURL = "git@github.com:howardkim0/car_monitor_logs.git"
@@ -353,7 +354,31 @@ func (c *realGitClient) commitAndPush(repo *git.Repository, keyPath, message str
 	return true, nil
 }
 
-// authMethodFromKey creates an SSH auth method from a private key file.
+// githubEd25519HostKey is GitHub's published ed25519 SSH host public key
+// (fingerprint SHA256:+DiY3wvvV6TuJJhbpZisF/zLDA0zPMSvHdkr4UvCOqU),
+// fetched from https://api.github.com/meta — GitHub's own authoritative,
+// machine-readable source — not transcribed from a docs page. Pinned
+// explicitly rather than left to go-git's default HostKeyCallback
+// (nil triggers NewKnownHostsDb, which tries $SSH_KNOWN_HOSTS, then
+// ~/.ssh/known_hosts, then /etc/ssh/ssh_known_hosts): none of those can
+// exist in this app's sandboxed process, so every push failed at the SSH
+// handshake with "cannot create known hosts callback," regardless of
+// network connectivity. Pinning to this fixed key (see DESIGN.md section
+// 7) is also more secure than ssh.InsecureIgnoreHostKey() would have
+// been, since remoteURL is always this same hardcoded GitHub host — no
+// reason to accept whatever key an on-path attacker presents instead.
+const githubEd25519HostKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl"
+
+// pinnedHostKeyText is the key authMethodFromKey actually verifies
+// against — a package-level var, not a direct reference to the
+// githubEd25519HostKey const, purely so tests can override it to force
+// authMethodFromKey's parse-error branch. That branch is otherwise
+// unreachable: the const is always valid, by construction.
+var pinnedHostKeyText = githubEd25519HostKey
+
+// authMethodFromKey creates an SSH auth method from a private key file,
+// verifying the server against pinnedHostKeyText (githubEd25519HostKey
+// in production).
 func authMethodFromKey(keyPath string) (ssh.AuthMethod, error) {
 	keyData, err := os.ReadFile(keyPath)
 	if err != nil {
@@ -365,5 +390,25 @@ func authMethodFromKey(keyPath string) (ssh.AuthMethod, error) {
 		return nil, fmt.Errorf("create public keys auth: %w", err)
 	}
 
+	hostKeyCallback, err := hostKeyCallbackForKey(pinnedHostKeyText)
+	if err != nil {
+		return nil, err
+	}
+	auth.HostKeyCallback = hostKeyCallback
+
 	return auth, nil
+}
+
+// hostKeyCallbackForKey parses an authorized-keys-format public key line
+// into a HostKeyCallback that accepts only that key. Factored out of
+// authMethodFromKey (which always calls it with the fixed
+// githubEd25519HostKey constant) purely so tests can exercise the parse
+// failure branch with a deliberately-invalid string — the real constant
+// is, by construction, always valid.
+func hostKeyCallbackForKey(keyText string) (cryptossh.HostKeyCallback, error) {
+	hostKey, _, _, _, err := cryptossh.ParseAuthorizedKey([]byte(keyText))
+	if err != nil {
+		return nil, fmt.Errorf("parse pinned GitHub host key: %w", err)
+	}
+	return cryptossh.FixedHostKey(hostKey), nil
 }

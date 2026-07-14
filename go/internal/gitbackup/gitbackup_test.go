@@ -722,8 +722,46 @@ func TestAuthMethodFromKeyInvalidKey(t *testing.T) {
 
 func TestAuthMethodFromKeyValidKey(t *testing.T) {
 	keyPath := generateTestKey(t)
-	if _, err := authMethodFromKey(keyPath); err != nil {
+	auth, err := authMethodFromKey(keyPath)
+	if err != nil {
 		t.Errorf("authMethodFromKey with a valid key: %v", err)
+	}
+
+	publicKeys, ok := auth.(*gitssh.PublicKeys)
+	if !ok {
+		t.Fatalf("authMethodFromKey returned %T, want *gitssh.PublicKeys", auth)
+	}
+	if publicKeys.HostKeyCallback == nil {
+		t.Error("authMethodFromKey must set HostKeyCallback — a nil callback falls back to " +
+			"go-git's known_hosts-file lookup, which can never succeed in this app's sandbox")
+	}
+}
+
+func TestHostKeyCallbackForKeyValid(t *testing.T) {
+	callback, err := hostKeyCallbackForKey(githubEd25519HostKey)
+	if err != nil {
+		t.Fatalf("hostKeyCallbackForKey(githubEd25519HostKey): %v", err)
+	}
+	if callback == nil {
+		t.Error("expected a non-nil HostKeyCallback for a valid key")
+	}
+}
+
+func TestHostKeyCallbackForKeyInvalid(t *testing.T) {
+	_, err := hostKeyCallbackForKey("not a valid authorized-keys line")
+	if err == nil {
+		t.Error("hostKeyCallbackForKey with an invalid key line should error")
+	}
+}
+
+func TestAuthMethodFromKeyPropagatesHostKeyParseError(t *testing.T) {
+	old := pinnedHostKeyText
+	pinnedHostKeyText = "not a valid authorized-keys line"
+	t.Cleanup(func() { pinnedHostKeyText = old })
+
+	keyPath := generateTestKey(t)
+	if _, err := authMethodFromKey(keyPath); err == nil {
+		t.Error("authMethodFromKey should propagate a hostKeyCallbackForKey parse error")
 	}
 }
 
