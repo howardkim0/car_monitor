@@ -14,10 +14,11 @@ entry point and owns Bluetooth I/O and process-lifecycle APIs, so a thin
 Kotlin shell hosts a Foreground Service and hands raw bytes to Go.
 
 For v1:
-- Bluetooth device is hardcoded to one known MAC address (a classic SPP
-  ELM327 dongle).
+- Bluetooth device defaults to one known MAC address (a classic SPP
+  ELM327 dongle) unless the user pairs/selects a different one in-app
+  (section 5.1) — no rebuild needed either way.
 - Vehicle profile is hardcoded to a 2023 Subaru Forester (PIDs it supports,
-  units, any make-specific quirks).
+  units, any make-specific quirks), with no in-app override yet.
 
 Both are implemented behind small interfaces so additional devices and
 vehicles can be added later without restructuring the app.
@@ -30,10 +31,10 @@ vehicles can be added later without restructuring the app.
   car turned off, phone Bluetooth toggled).
 - Store readings locally in a simple, inspectable format.
 - Keep the door open for more dongles / more cars without a rewrite.
+- Let the user pick or pair which Bluetooth dongle to use, without a rebuild.
 
 **Non-goals (v1)**
 - No cloud sync, no remote telemetry, no multi-device fleet management.
-- No in-app Bluetooth pairing UI / device picker (MAC is hardcoded).
 - No support for non-ELM327 protocols (e.g. proprietary CAN dongles).
 - No iOS.
 
@@ -56,11 +57,12 @@ The practical split, and what this doc assumes:
   out. Also owns permissions, the persistent notification, boot-start, and
   a single status Activity (connected/disconnected, last readings). Its
   action buttons (battery-optimization exemption, export logs, copy SSH
-  public key, test alert, git push, stop/start scanning, quit) are a single
-  full-width, vertically stacked column, not a grid — label lengths vary
-  enough (a two-line "Copy SSH Public Key" next to a one-line "Quit App")
-  that a multi-column layout doesn't stay aligned, exactly the
-  misalignment the previous row-based layout had in practice.
+  public key, test alert, git push, pair Bluetooth OBD2 scanners, show
+  paired scanners, stop/start scanning, quit) are a single full-width,
+  vertically stacked column, not a grid — label lengths vary enough (a
+  two-line "Copy SSH Public Key" next to a one-line "Quit App") that a
+  multi-column layout doesn't stay aligned, exactly the misalignment the
+  previous row-based layout had in practice.
 
 Go stays the place where all the interesting logic and all the tests live;
 Kotlin is intentionally kept dumb (I/O plumbing + Android ceremony). For example,
@@ -117,7 +119,8 @@ business logic requiring a Go round-trip.
 
 ### Data flow
 
-1. `ObdForegroundService` opens an RFCOMM socket to the hardcoded MAC using
+1. `ObdForegroundService` opens an RFCOMM socket to `Mobile.deviceMAC()`
+   (the selected device, section 5.1, or the hardcoded fallback) using
    the standard SPP UUID (`00001101-0000-1000-8000-00805F9B34FB`).
 2. Raw bytes read from the socket are pushed into the Go layer
    (`Session.Feed(data []byte)` in the gomobile binding).
@@ -208,23 +211,60 @@ business logic requiring a Go round-trip.
 ```go
 // internal/device/device.go
 type Profile struct {
-    Name       string // human-readable, e.g. "OBDLink MX+"
-    MACAddress string // "00:1D:A5:68:98:8A"
-    Protocol   string // "spp" (classic RFCOMM) — only one supported today
+    Name       string   // human-readable, e.g. "OBDLink MX+"
+    MACAddress string   // "00:1D:A5:68:98:8A"
+    Protocol   Protocol // ProtocolSPP (classic RFCOMM) — only one supported today
 }
 
 var known = []Profile{
-    {Name: "Garage OBDLink", MACAddress: "00:1D:A5:68:98:8A", Protocol: "spp"},
+    {Name: "Garage OBDLink", MACAddress: "00:1D:A5:68:98:8A", Protocol: ProtocolSPP},
 }
 
 func Default() Profile { return known[0] }
 ```
 
-Today the hardcoded MAC is just `Default()`, wired to a build-time config
-value (see 5.3). Adding a second device later means appending to `known`
-and adding a selection mechanism (config value, or eventually a UI picker);
-`internal/obd2` and the Kotlin service only ever depend on `device.Profile`,
-never on a literal MAC string.
+`known`/`Default()` remain the factory fallback for a fresh install, but
+the device actually connected to is `SelectedOrDefault(dir)`: a persisted
+user choice (`SaveSelected`/`LoadSelected`, a small `mac\nname\n` text
+file under the app's storage root — same plain-text-over-JSON philosophy
+as `internal/applog`, section 6.2) takes priority over `Default()` once
+one exists. `mobile.DeviceMAC(storageDir)` and
+`mobile.SetSelectedDevice(storageDir, mac, name)` are the JNI-facing
+wrappers Kotlin calls — `internal/obd2` and the connection code never see
+a literal MAC either way, only ever `device.Profile`, so this selection
+layer sits on top of the existing extensibility point rather than adding
+a new one.
+
+Two entry points on the status screen write a selection, both Kotlin-only
+(matching `LogExporter`'s precedent, section 3 — device discovery/pairing
+is Android framework ceremony, not business logic):
+- **"Pair Bluetooth OBD2 Scanners"** (`DeviceScanActivity`, a dedicated
+  screen — this is a genuinely stateful flow, not a quick dialog) lists
+  already-bonded devices for one-tap selection, and separately runs
+  `BluetoothAdapter.startDiscovery()` for nearby *unpaired* ones —
+  tapping one calls `BluetoothDevice.createBond()` (Android's own system
+  pairing dialog handles the PIN exchange; this app never implements
+  pairing itself) and selects it once bonding completes.
+- **"Show Paired Scanners"** is a lighter-weight `AlertDialog` on the
+  status screen (no new Activity — it only needs `getBondedDevices()`,
+  not the ongoing discovery lifecycle a full scan needs) listing every
+  bonded device with a status per row: `Connected`, `Selected` (the next
+  connection attempt will use it, but it isn't connected right now), or
+  plain `Paired`. Lets a driver switch between two dongles the phone
+  already knows about without re-scanning.
+
+Both flows call `ObdForegroundService.reconnectNow()` (via `boundService`,
+if currently bound) after a selection change. That method just closes
+the current socket/session — it doesn't add a new "restart" code path;
+`connectionLoop`'s existing retry logic picks up the new `DeviceMAC()` on
+its very next attempt. Same caveat as `stopServiceImmediately()` (section
+7): if a `connect()` call to the *old* device is already blocked
+mid-flight, closing a socket that hasn't been assigned to the instance
+field yet can't interrupt it — the switch takes effect on the attempt
+after that one finishes or fails. If the service isn't running (stopped),
+`reconnectNow()` is a no-op — the new selection just becomes what's used
+whenever the user next taps Start Scanning, consistent with "resuming
+after a stop is always explicit."
 
 ### 5.2 Vehicles
 
@@ -312,10 +352,13 @@ rebuild; not needed for v1.
 
 ### 5.3 Selecting device/vehicle without a rebuild
 
-For v1, `device.Default()` and `vehicle.Default()` are simple hardcoded
-functions — no config file, no UI. The interfaces above exist specifically
-so that swapping this out later (env var, JSON asset, in-app picker) is a
-localized change.
+`device.Default()` is now overridable at runtime, no rebuild needed — see
+5.1's persisted-selection mechanism and its two status-screen entry
+points. `vehicle.Default()` is still a simple hardcoded function with no
+config file or UI (section 12); the interface exists so swapping it out
+later (env var, JSON asset, extending the device-picker UI to also cover
+vehicle profile) is a localized change, the same way device selection
+was before this.
 
 ## 6. Storage
 
@@ -496,6 +539,13 @@ needing `adb`.
   (no multi-process manifest config) — the standard way an Android app
   provides a true "exit," as opposed to Android's normal expectation that
   the OS manages process lifecycle.
+- **`reconnectNow()`**: switching the selected device (section 5.1) calls
+  this rather than adding a fourth teardown path alongside Stop/Quit/the
+  no-connection timeout — it's deliberately lighter than
+  `stopServiceImmediately()`, just closing the current socket/session so
+  `connectionLoop`'s own retry logic reconnects using the new
+  `DeviceMAC()`, without touching `connectionJob`, without a terminal
+  `ConnectionState`, and without requiring "Start Scanning" afterward.
 - **Git backup loop** runs independently of the Bluetooth connection lifecycle,
   launched once in `onCreate()` (not recreated on every `onStartCommand()` like
   `connectionJob`) and cancelled once in `onDestroy()`. Backing up existing
@@ -559,12 +609,13 @@ needing `adb`.
   normal permissions any Bluetooth API call requires; superseded by
   `BLUETOOTH_CONNECT` on API 31+
 - `BLUETOOTH_CONNECT` (Android 12+, API 31+)
-- `BLUETOOTH_SCAN` (only needed if we ever add discovery; not required for
-  connecting to a hardcoded, already-paired MAC, but harmless to declare
-  ahead of the device-picker extensibility work) — note the Android shell
-  must not call any SCAN-gated API (e.g. `BluetoothAdapter.cancelDiscovery()`)
-  against a hardcoded MAC without also requesting this at runtime, or every
-  connection attempt fails with `SecurityException` on API 31+
+- `BLUETOOTH_SCAN` (Android 12+, API 31+) — requested at runtime by
+  `DeviceScanActivity` (section 5.1) before calling
+  `BluetoothAdapter.startDiscovery()`; not needed just to connect to an
+  already-selected, already-paired MAC, only to discover new ones — note
+  the Android shell must not call any SCAN-gated API (e.g.
+  `BluetoothAdapter.cancelDiscovery()`) without also requesting this at
+  runtime first, or the call fails with `SecurityException` on API 31+
 - `ACCESS_FINE_LOCATION` (still required by some OEMs for classic
   Bluetooth on API < 31)
 - `FOREGROUND_SERVICE` and `FOREGROUND_SERVICE_CONNECTED_DEVICE` (API 34+)
@@ -725,9 +776,10 @@ as a legitimate update to this app, so it's kept out of the repo entirely
 
 ## 12. Open questions / future work
 
-- Where does device/vehicle selection live once it's no longer hardcoded —
-  a bundled JSON asset, or an in-app settings screen? (Interfaces in §5 are
-  designed so this is additive.)
+- Vehicle selection (unlike device selection, now resolved — section 5.1)
+  is still hardcoded to `vehicle.Default()`. A bundled JSON asset, or
+  extending the device-picker UI to also cover vehicle profile, are both
+  additive given §5's interfaces.
 - DTC (fault code) reading/clearing is out of scope for v1 but fits the
   same PID-request pattern in `internal/obd2`.
 - `obd2.InitCommands()` (section 4 step 5) deliberately sends five
