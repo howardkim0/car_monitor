@@ -185,3 +185,20 @@ func (s *Session) Close() error {
 func DeviceMAC() string {
 	return device.Default().MACAddress
 }
+
+// InitCommandCount returns how many ELM327 setup commands
+// InitCommandAt should be polled for — see internal/obd2.InitCommands.
+func InitCommandCount() int {
+	return len(obd2.InitCommands())
+}
+
+// InitCommandAt returns the i'th ELM327 setup command. Returns "" if i
+// is out of range rather than panicking across the gomobile/JNI boundary
+// (same convention as Session.CommandAt).
+func InitCommandAt(i int) string {
+	cmds := obd2.InitCommands()
+	if i < 0 || i >= len(cmds) {
+		return ""
+	}
+	return cmds[i]
+}

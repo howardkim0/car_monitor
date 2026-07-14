@@ -229,6 +229,17 @@ func buildCommands(profile vehicle.Profile, supported map[byte]bool) []string {
 	return cmds
 }
 
+// InitCommands returns the fixed ELM327 setup sequence sent once per
+// connection, before any PID/discovery command — see DESIGN.md section 4
+// step 5 for why. ATS1 and ATH0 are load-bearing: parseResponseBytes
+// requires space-separated single-byte hex fields with no header/CAN-ID
+// field, and a prior session (this app's or a different one's) can leave
+// the adapter with either turned off/on the wrong way, since ELM327
+// settings persist across Bluetooth reconnects.
+func InitCommands() []string {
+	return []string{"ATE0", "ATL0", "ATS1", "ATH0", "ATSP0"}
+}
+
 // Feed appends newly-read bytes from the Bluetooth socket and processes
 // every complete (terminator-delimited) line. Partial lines are buffered
 // until the remainder arrives in a later call.

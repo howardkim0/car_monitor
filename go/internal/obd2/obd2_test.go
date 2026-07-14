@@ -28,6 +28,14 @@ func TestCommandsReturnsDiscoveryQueriesInitially(t *testing.T) {
 	}
 }
 
+func TestInitCommands(t *testing.T) {
+	got := InitCommands()
+	want := []string{"ATE0", "ATL0", "ATS1", "ATH0", "ATSP0"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("InitCommands() = %v, want %v", got, want)
+	}
+}
+
 // discoveryResponseLine builds a "PIDs supported" response line for the
 // given base ("0x00", "0x20", or "0x40") where exactly the PIDs in
 // codes are flagged supported.

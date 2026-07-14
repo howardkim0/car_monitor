@@ -414,6 +414,11 @@ class ObdForegroundService : Service() {
         }
     }
 
+    @VisibleForTesting
+    internal fun writeCommand(output: java.io.OutputStream, command: String) {
+        output.write((command + "\r").toByteArray(Charsets.US_ASCII))
+    }
+
     private suspend fun writeLoop(socket: BluetoothSocket, session: Session) {
         val output = socket.outputStream
         var cycleCount = 0L
@@ -426,13 +431,19 @@ class ObdForegroundService : Service() {
             "POLL_CYCLE_MS=$POLL_CYCLE_MS commandCount=${session.commandCount()}"
         Log.d(TAG, startMsg)
         Mobile.logDebug(startMsg)
+        // ELM327 setup, once per connection, before any PID/discovery command
+        // — see DESIGN.md section 4 step 5 for why this exists.
+        for (i in 0 until Mobile.initCommandCount()) {
+            writeCommand(output, Mobile.initCommandAt(i))
+            delay(COMMAND_INTERVAL_MS)
+        }
         while (currentCoroutineContext().isActive) {
             val cycleStart = SystemClock.elapsedRealtime()
             val commandCount = session.commandCount()
             for (i in 0L until commandCount) {
                 val command = session.commandAt(i)
                 if (command.isEmpty()) continue
-                output.write((command + "\r").toByteArray(Charsets.US_ASCII))
+                writeCommand(output, command)
                 output.flush()
                 delay(COMMAND_INTERVAL_MS)
             }

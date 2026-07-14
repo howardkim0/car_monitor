@@ -158,6 +158,22 @@ class ObdForegroundServiceTest {
         assertEquals(AnomalyNotifications.CHANNEL_ID, posted!!.channelId)
     }
 
+    @Test
+    fun `writeCommand writes command with carriage return as ASCII bytes`() {
+        val service = newService()
+        val mockOutputStream = mockk<java.io.OutputStream>(relaxed = true)
+        val slot = io.mockk.slot<ByteArray>()
+
+        io.mockk.every { mockOutputStream.write(capture(slot)) } returns Unit
+
+        service.writeCommand(mockOutputStream, "ATE0")
+
+        io.mockk.verify(exactly = 1) { mockOutputStream.write(any<ByteArray>()) }
+        val wantBytes = "ATE0\r".toByteArray(Charsets.US_ASCII)
+        assertEquals("writeCommand should write command with carriage return",
+            wantBytes.contentToString(), slot.captured.contentToString())
+    }
+
     // ACTION_QUIT is deliberately NOT exercised through onStartCommand()
     // here: its branch ends in Process.killProcess(Process.myPid()),
     // which would kill the JVM this test suite itself runs in, not just

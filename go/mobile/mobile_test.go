@@ -286,6 +286,24 @@ func TestDeviceMAC(t *testing.T) {
 	}
 }
 
+func TestInitCommandCount(t *testing.T) {
+	if got := InitCommandCount(); got != 5 {
+		t.Errorf("InitCommandCount() = %d, want 5", got)
+	}
+}
+
+func TestInitCommandAt(t *testing.T) {
+	if got := InitCommandAt(0); got != "ATE0" {
+		t.Errorf("InitCommandAt(0) = %q, want %q", got, "ATE0")
+	}
+	if got := InitCommandAt(-1); got != "" {
+		t.Errorf("InitCommandAt(-1) = %q, want empty string, not a panic", got)
+	}
+	if got := InitCommandAt(InitCommandCount()); got != "" {
+		t.Errorf("InitCommandAt(InitCommandCount()) = %q, want empty string, not a panic", got)
+	}
+}
+
 func TestNewSessionLogsPruneErrorButStillCreatesSession(t *testing.T) {
 	resetAppLogger(t)
 	logDir := t.TempDir()
