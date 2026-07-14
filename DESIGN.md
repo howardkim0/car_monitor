@@ -155,10 +155,9 @@ business logic requiring a Go round-trip.
    leading header/CAN-ID field (`ATH0`) — a response like `7E8 04 41 0C 1A
    F8` (headers on) fails outright, because `7E8` doesn't fit in a byte.
    That failure is indistinguishable from ordinary ELM327 noise (skipped
-   silently, same as an echoed command or the `>` prompt), so a
-   misconfigured adapter previously produced a live, correctly-polling
-   session with zero decoded readings and zero error output — the
-   symptom that led here. Deliberately no `ATZ` (full reset): that would
+   silently, same as an echoed command or the `>` prompt) — see
+   `docs/defects.md` for the zero-readings incident this traces to.
+   Deliberately no `ATZ` (full reset): that would
    fix the same problem but costs a real reset (~1-2s on some clones) on
    every reconnect, including the frequent, transient ones the backoff
    loop in section 7 already retries — the five explicit `AT` setting
@@ -248,58 +247,24 @@ is Android framework ceremony, not business logic):
   is a toggle, not a one-shot trigger: tapping it again while a scan is
   running calls `BluetoothAdapter.cancelDiscovery()` immediately, rather
   than only waiting out Android's own ~12s discovery timeout; its label
-  reflects which state it's in. `startDiscovery()`'s boolean return value
-  is also checked now — it can return `false` (adapter disabled,
-  discovery already running) without throwing, which previously left the
-  button stuck showing "Scanning…" forever with no scan actually
-  running and no way out except leaving the screen. A `SecurityException`
-  from a denied permission (starting a scan, listing bonded devices,
-  reading a device's name) surfaces as a visible status message too, not
-  just a log line — a silent failure here was indistinguishable from "no
-  devices nearby." Both were real contributors to a "the scan button
-  doesn't seem to do anything" report; section 8's `neverForLocation` fix
-  is the most likely primary cause, though not independently confirmed
-  against that specific device's Location Services state.
-
-  A follow-up report ("the toggle works now, but no discoverable devices
-  ever show up") arrived with no new evidence in `car_monitor_logs`
-  (section 7's git-backup sync hadn't fired since the prior report —
-  a short test session between the automatic 5-minute checks leaves
-  nothing to diff). Re-review found a genuine second gap in the
-  `neverForLocation` fix (section 8): that flag only exempts API 31+
-  from needing system Location Services on for discovery to return
-  results — this app's `minSdk` is 26, and on API 26-30 classic
-  discovery still silently needs Location Services on regardless of
-  the flag (`startDiscovery()` still returns `true`, still fires
-  `ACTION_DISCOVERY_FINISHED` on schedule, just with zero
-  `ACTION_FOUND` broadcasts in between). `DeviceScanActivity` now
-  checks `LocationManager.isLocationEnabled()` before starting a scan
-  on API < 31, and shows a direct status message telling the user to
-  enable it instead of running a scan that's silently guaranteed to
-  find nothing. Alongside that, the status text also now reports live
-  scan state instead of staying static instructional text —
-  "Scanning… (N found)" as each `ACTION_FOUND` arrives, and a final
-  "Scan finished — N found" (explicitly saying zero, rather than
-  looking indistinguishable from "still scanning" or "stuck") on
-  `ACTION_DISCOVERY_FINISHED` — both so a genuinely-empty result (most
-  nearby devices, unlike most ELM327 dongles, aren't discoverable by
-  default) is distinguishable from something being stuck, and so any
-  *next* report is self-diagnosing without a git-log round trip.
-
-  A third report arrived with the previous two fixes already installed,
-  but its `app.log` export turned out to contain no evidence from the
-  current build at all — every line predated the install (confirmed by
-  comparing log timestamps against the GitHub Actions run that published
-  that release). Two lessons taken from that: first, `DeviceScanActivity`
-  had no logging at all on its non-error scan path, so even a
-  same-session export couldn't confirm whether a scan had actually run;
-  it now logs the location check result, `startDiscovery()`'s return
-  value, and each `ACTION_FOUND`/`ACTION_DISCOVERY_FINISHED` via
-  `Mobile.logDebug` (see section 6.2). Second, nothing in `app.log`
-  identified which commit produced it, making "is this actually the
-  fixed build?" a guessing game from timestamps alone — every build now
-  stamps `BuildConfig.GIT_COMMIT` (section 6.2) and logs it once at
-  app startup.
+  reflects which state it's in, and `startDiscovery()`'s boolean return
+  value is checked (it can return `false` — adapter disabled, discovery
+  already running — without throwing). A `SecurityException` from a
+  denied permission (starting a scan, listing bonded devices, reading a
+  device's name) surfaces as a visible status message, not just a log
+  line. Before starting a scan, `isLocationEnabled()` checks the system
+  Location Services toggle directly on API < 31 (no
+  `neverForLocation`-equivalent exemption exists below API 31, section 8)
+  and shows a direct message if it's off, rather than running a scan
+  that's silently guaranteed to find nothing. Status text reports live
+  scan state — "Scanning… (N found)" as each device is found, "Scan
+  finished — N found" when discovery ends — so a genuinely-empty result
+  (most nearby devices, unlike most ELM327 dongles, aren't discoverable
+  by default) reads as confirmed zero, not "stuck." Every step of this
+  flow (the location check result, `startDiscovery()`'s return value,
+  each `ACTION_FOUND`/`ACTION_DISCOVERY_FINISHED`) is logged via
+  `Mobile.logDebug` (section 6.2). See `docs/defects.md` for the
+  three-round investigation this design traces to.
 - **"Show Paired Devices"** is a lighter-weight `AlertDialog` on the
   status screen (no new Activity — it only needs `getBondedDevices()`,
   not the ongoing discovery lifecycle a full scan needs) listing every
@@ -500,10 +465,8 @@ Reachable from both sides of the Go/Kotlin split, per this doc's
 a `Session` is recreated on every Bluetooth reconnect, but the app log
 must stay open across that churn) gomobile exports Kotlin calls into
 `ObdForegroundService`'s existing `Log.w` sites, and Go's own error
-paths write to the same log — notably `mobile.go`'s reading-append
-path, which used to silently swallow a failed `store.Append` (`_ =
-s.store.Append(r)`); it now routes that error through `LogError`
-instead.
+paths write to the same log, including `mobile.go`'s reading-append
+path (see `docs/defects.md` for the swallowed-error bug this fixed).
 
 Every write here is best-effort by design: a logging failure must never
 crash or block the app it's attached to, so both the Go side
@@ -527,21 +490,17 @@ main thread — via each Activity's own `scope.launch(Dispatchers.IO) {
 `app.log`'s disk write off the UI thread: under Robolectric (plain-JVM
 unit tests, section 13), there's no native `libgojni.so` to load at
 all, so a synchronous `Mobile.*` call reached during `onCreate()`
-throws `UnsatisfiedLinkError` and fails the test outright. `StatusActivity`
-and `DeviceScanActivity` both follow this pattern for every `Mobile.*`
-call, including the device-scan and build-stamp logging described
-below — a real regression caught by `./gradlew testDebugUnitTest` the
-first time that logging was added synchronously.
+throws `UnsatisfiedLinkError` and fails the test outright.
+`StatusActivity` and `DeviceScanActivity` both follow this pattern for
+every `Mobile.*` call (see `docs/defects.md` for the regression this
+rule traces to).
 
 Every build also stamps a `BuildConfig.GIT_COMMIT` field (the output of
 `git rev-parse --short=12 HEAD` at build time, `"unknown"` if git isn't
-available) and `StatusActivity` logs it once via `Mobile.logDebug` on
-app startup. This exists because a bug report's log evidence has more
-than once turned out to predate the fix it was meant to confirm or
-refute — with no build identifier in `app.log`, that was only
-discoverable by cross-referencing log timestamps against GitHub Actions
-run times after the fact. Section 5.1 covers the matching addition of
-scan-lifecycle logging to `DeviceScanActivity`.
+available), and `StatusActivity` logs it once via `Mobile.logDebug` on
+app startup — so a log export can be matched to the exact build that
+produced it (see `docs/defects.md`). Section 5.1 covers the matching
+scan-lifecycle logging in `DeviceScanActivity`.
 
 ### 6.3 SSH key for log backup
 
@@ -595,17 +554,13 @@ needing `adb`.
   3. `updateState()` with the terminal state, *then*
      `stopForeground`+`stopSelf`.
 
-  This exists because two earlier, real bugs made "Stop" unreliable:
-  `connectionLoop()`'s `catch (e: Exception)` was catching
-  `CancellationException` too (a plain `Exception` subtype in Kotlin) and
-  treating a requested stop as just another failed attempt to retry —
-  fixed by rethrowing it explicitly, before any broader catch clause. And
-  a Service stays alive as long as it's started *or* bound, so a bound
-  `StatusActivity` (app left open) meant `stopSelf()` alone did nothing
-  and `onDestroy()` might never run — `StatusActivity` now unbinds itself
-  in direct response to any terminal `ConnectionState` (`Stopped`,
-  `TimedOut`) rather than that being incidental to who happened to call
-  `updateState()`.
+  `StatusActivity` unbinds itself in direct response to any terminal
+  `ConnectionState` (`Stopped`, `TimedOut`) rather than that being
+  incidental to who happened to call `updateState()` — a Service stays
+  alive as long as it's started *or* bound, so a bound `StatusActivity`
+  left unhandled here would keep the service alive no matter how many
+  times `stopSelf()` is called. See `docs/defects.md` for the two real
+  bugs this teardown path fixed.
 
   Resuming after a stop is **always explicit** — tapping "Start Scanning"
   is the only way; reopening the app on its own does not resume
@@ -650,37 +605,21 @@ needing `adb`.
   immediate, ungated push — for a driver who wants to confirm backup is
   working right now rather than wait for the next automatic check.
   SSH host-key verification is **pinned to GitHub's own published ed25519
-  host key**, not left to go-git's default: `ssh.NewPublicKeys`'
-  `HostKeyCallback` is nil unless set explicitly, which makes go-git fall
-  back to reading `~/.ssh/known_hosts` — a lookup that can never succeed
-  in this app's sandbox (no `$HOME`, no such file, no `SSH_KNOWN_HOSTS`
-  env var), so *every* push, automatic or manual, failed at the SSH
-  handshake with "cannot create known hosts callback," regardless of
-  network connectivity or anything else about the attempt. The pinned
-  key (fetched from `https://api.github.com/meta`, GitHub's own
-  authoritative source, not transcribed from a docs page) is checked via
-  `ssh.FixedHostKey`, which both fixes this outright and is the more
-  secure choice anyway, given the remote is always the same hardcoded
-  GitHub host — no reason to accept whatever key an on-path attacker
-  might present, which `InsecureIgnoreHostKey()` would have done. If
-  GitHub ever rotates this key (it has, publicly, before), this fails
-  closed — pushes start erroring again, the same visible symptom as
-  today — rather than silently falling back to accepting an unverified
-  key, which would be the worse failure mode.
-
-  Pinning the key alone wasn't sufficient: `HostKeyAlgorithms` — a sibling
-  field to `HostKeyCallback` on the same `*ssh.PublicKeys` `ssh.NewPublicKeys`
-  returns — also has to be set explicitly to `["ssh-ed25519"]`, or
-  golang.org/x/crypto/ssh's own default algorithm list applies instead —
-  GitHub supports RSA, ECDSA,
-  *and* ed25519 host keys, and without a preference the negotiated key type
-  isn't guaranteed to be the ed25519 one this app pins, so `FixedHostKey`
-  correctly (if confusingly) rejects whatever different key type gets
-  negotiated as a "host key mismatch." Verified directly against the real
-  `github.com:22` before landing this: the handshake fails with exactly
-  that error when `HostKeyAlgorithms` is left unset, and succeeds (reaching
-  the *next* stage, authentication) once it's set to request ed25519
-  specifically.
+  host key**, not left to go-git's default: the key (fetched from
+  `https://api.github.com/meta`, GitHub's own authoritative source, not
+  transcribed from a docs page) is checked via `ssh.FixedHostKey`, with
+  `HostKeyAlgorithms` also set explicitly to `["ssh-ed25519"]` so that's
+  actually the key type negotiated (GitHub supports RSA and ECDSA host
+  keys too; without a stated preference, `FixedHostKey` can end up
+  rejecting whichever of those gets negotiated instead). This is also
+  the more secure choice regardless, given the remote is always the same
+  hardcoded GitHub host — no reason to accept whatever key an on-path
+  attacker might present, which `InsecureIgnoreHostKey()` would have
+  done. If GitHub ever rotates this key (it has, publicly, before), this
+  fails closed — pushes start erroring again — rather than silently
+  falling back to accepting an unverified key, which would be the worse
+  failure mode. See `docs/defects.md` for the two-stage SSH handshake
+  failure that led to pinning both the key and its algorithm.
 
 ## 8. Permissions
 
@@ -700,13 +639,8 @@ needing `adb`.
   Android additionally requires the *system* Location Services toggle to
   be on for discovery to return any results at all on API 31+, silently
   (no error, no exception — `startDiscovery()` just never finds
-  anything). This is the most likely primary cause of a real "the pair
-  button doesn't seem to scan" report (not independently confirmed
-  against that specific device's Location Services state, since that's
-  not observable from app logs) — section 5.1 also covers two smaller,
-  independently-real contributors found in the same investigation
-  (an unchecked `startDiscovery()` return value, and permission
-  failures that were silent in the UI). This flag is API 31+ only.
+  anything). This flag is API 31+ only (see `ACCESS_FINE_LOCATION` below
+  for API < 31). See `docs/defects.md` for the reports that led here.
 - `ACCESS_FINE_LOCATION` (still required by some OEMs for classic
   Bluetooth on API < 31) — on API 26-30, the *system* Location Services
   toggle is also required for `startDiscovery()` to return results, the
@@ -1023,18 +957,13 @@ coverage (Kover) as a build artifact; it isn't gated. Revisit this once
 the Android test suite has enough real breadth that a numeric floor would
 mean something.
 
-**Regression tests, backfilled for specific bugs found during development**
-(per `CLAUDE.md`'s "every caught bug gets a regression test," applied
-retroactively where it still tests current behavior — not for behavior
-later deliberately removed, like the old auto-resume-on-reopen):
-`connectSocket()` (extracted from `openConnection()`) closing the socket
-on a failed `connect()`; `onStartCommand()` refusing to launch a second
-concurrent `connectionLoop()`; `ACTION_STOP` actually cancelling the
-active `connectionJob` synchronously rather than only requesting a stop
-that the still-running loop could outlive (the root cause of "tap Stop,
-it retries anyway"); and both `TimedOut` and `Stopped` states unbinding
-`StatusActivity` from the service. `ACTION_QUIT` is deliberately *not*
-exercised through an automated test — its handler ends in
+**Regression tests exist for bugs actually found during development**,
+per `CLAUDE.md`'s "every caught bug gets a regression test" — see
+`docs/defects.md` for what each bug was and why; the tests themselves
+are applied retroactively where they still test current behavior, not
+for behavior later deliberately removed (like the old
+auto-resume-on-reopen). `ACTION_QUIT` is deliberately *not* exercised
+through an automated test — its handler ends in
 `Process.killProcess(Process.myPid())`, which would kill the test JVM
 itself, not just an app-under-test process, and there's no Robolectric
 shadow worth trusting there. It shares `ACTION_STOP`'s exact

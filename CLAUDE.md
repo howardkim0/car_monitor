@@ -15,13 +15,38 @@ Real app logs/readings push automatically to
 export logs manually, check that repo for the latest `app.log`/
 `readings-*.csv` — it may already have what's needed.
 
+## Check docs/defects.md before investigating a new defect
+
+`docs/defects.md` is a grouped-by-subsystem log of real bugs already
+found and fixed (Bluetooth scanning, git/SSH, service lifecycle, etc.),
+each with its symptom, root cause, and fix. Before digging into a new
+report, check whether it matches a documented pattern — several
+"still broken" reports in this repo turned out to be a new angle on an
+already-fixed class of bug (e.g. stale-APK log evidence misread as a
+live regression), and re-reading the relevant entry is faster than
+re-deriving the same root cause from scratch. A pattern match doesn't
+end the investigation on its own — confirm it still applies before
+concluding "already fixed."
+
+## Defect fixes get an entry in docs/defects.md
+
+Whenever a real bug is found and fixed, add an entry to
+`docs/defects.md` (in the matching subsystem section, or a new one) —
+symptom, root cause, fix, and the commit if known. This is the
+"history worth keeping" for defects specifically: `DESIGN.md` stays
+timeless and states only current behavior, `docs/defects.md` is where
+the story of how a bug was found and why it happened lives, cross-
+referenced from the relevant `DESIGN.md` section rather than repeated
+there.
+
 ## DESIGN.md is timeless
 
 It describes the app as it exists now, not a changelog of any session,
 PR, or round of edits — avoid phrasing like "this session" or "just
 added." Use present tense for durable facts (e.g. "a prune pass caps
 reading logs at 30 files"). History worth keeping goes in commit
-messages or `docs/plan-*.md`, not DESIGN.md. Fix drifted language
+messages, `docs/plan-*.md`, or — specifically for bug fixes —
+`docs/defects.md` (see below), not DESIGN.md. Fix drifted language
 wherever you touch a section, even if that wasn't the point of the change.
 
 ## Planning docs go in docs/
@@ -64,7 +89,8 @@ passes:
 Whenever a bug is found and fixed — by the review above, CI, or a
 human — add a test that would have failed before the fix, not just the
 fix. No exceptions for "a human found it" or "the fix is obviously
-correct." Go tests: table-driven, one file per source file.
+correct." Go tests: table-driven, one file per source file. Add the
+matching `docs/defects.md` entry in the same change (see above).
 
 ## Tests and build are enforced
 
