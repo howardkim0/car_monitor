@@ -539,6 +539,20 @@ needing `adb`.
   today — rather than silently falling back to accepting an unverified
   key, which would be the worse failure mode.
 
+  Pinning the key alone wasn't sufficient: `HostKeyAlgorithms` — a sibling
+  field to `HostKeyCallback` on the same `*ssh.PublicKeys` `ssh.NewPublicKeys`
+  returns — also has to be set explicitly to `["ssh-ed25519"]`, or
+  golang.org/x/crypto/ssh's own default algorithm list applies instead —
+  GitHub supports RSA, ECDSA,
+  *and* ed25519 host keys, and without a preference the negotiated key type
+  isn't guaranteed to be the ed25519 one this app pins, so `FixedHostKey`
+  correctly (if confusingly) rejects whatever different key type gets
+  negotiated as a "host key mismatch." Verified directly against the real
+  `github.com:22` before landing this: the handshake fails with exactly
+  that error when `HostKeyAlgorithms` is left unset, and succeeds (reaching
+  the *next* stage, authentication) once it's set to request ed25519
+  specifically.
+
 ## 8. Permissions
 
 - `BLUETOOTH` and `BLUETOOTH_ADMIN` (`maxSdkVersion=30`) — the pre-API-31
