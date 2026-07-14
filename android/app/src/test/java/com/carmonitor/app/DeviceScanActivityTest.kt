@@ -43,4 +43,11 @@ class DeviceScanActivityTest {
         val button = activity.findViewById<Button>(R.id.scanButton)
         assertTrue("scan button should never be disabled — it's a toggle now", button.isEnabled)
     }
+
+    @Test
+    fun `scan button click does not crash when Bluetooth adapter is unavailable`() {
+        val activity = newActivity()
+        val button = activity.findViewById<Button>(R.id.scanButton)
+        button.performClick() // must not throw
+    }
 }

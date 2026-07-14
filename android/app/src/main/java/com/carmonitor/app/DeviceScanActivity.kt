@@ -60,11 +60,13 @@ class DeviceScanActivity : AppCompatActivity() {
                     val device = intent.getBluetoothDeviceExtra() ?: return
                     if (device.bondState != BluetoothDevice.BOND_BONDED && discoveredAddresses.add(device.address)) {
                         addDeviceRow(availableContainer, device, isPaired = false)
+                        statusText.text = getString(R.string.device_scan_found_count, discoveredAddresses.size)
                     }
                 }
                 BluetoothAdapter.ACTION_DISCOVERY_FINISHED -> {
                     isScanning = false
                     scanButton.text = getString(R.string.device_scan_button)
+                    statusText.text = getString(R.string.device_scan_finished_count, discoveredAddresses.size)
                 }
                 BluetoothDevice.ACTION_BOND_STATE_CHANGED -> {
                     val device = intent.getBluetoothDeviceExtra() ?: return
@@ -127,6 +129,32 @@ class DeviceScanActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * On API < 31, classic Bluetooth discovery silently returns zero
+     * ACTION_FOUND broadcasts if the system Location Services toggle is
+     * off — no exception, startDiscovery() still returns true. API 31+ is
+     * exempt via the BLUETOOTH_SCAN manifest declaration's
+     * neverForLocation flag (see DESIGN.md section 8), so this only needs
+     * to check on older versions.
+     */
+    private fun isLocationEnabled(): Boolean {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            return true
+        }
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            val locationManager = getSystemService(Context.LOCATION_SERVICE) as? android.location.LocationManager
+            locationManager?.isLocationEnabled ?: true
+        } else {
+            @Suppress("DEPRECATION")
+            val mode = android.provider.Settings.Secure.getInt(
+                contentResolver,
+                android.provider.Settings.Secure.LOCATION_MODE,
+                android.provider.Settings.Secure.LOCATION_MODE_OFF
+            )
+            mode != android.provider.Settings.Secure.LOCATION_MODE_OFF
+        }
+    }
+
     private fun startScan() {
         val adapter = (getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager).adapter ?: return
         if (isScanning) {
@@ -137,6 +165,11 @@ class DeviceScanActivity : AppCompatActivity() {
             }
             isScanning = false
             scanButton.text = getString(R.string.device_scan_button)
+            statusText.text = getString(R.string.device_scan_finished_count, discoveredAddresses.size)
+            return
+        }
+        if (!isLocationEnabled()) {
+            statusText.text = getString(R.string.location_services_required)
             return
         }
         availableContainer.removeAllViews()
@@ -157,6 +190,7 @@ class DeviceScanActivity : AppCompatActivity() {
         }
         isScanning = true
         scanButton.text = getString(R.string.device_scan_stop_button)
+        statusText.text = getString(R.string.device_scan_found_count, 0)
     }
 
     private fun addDeviceRow(container: LinearLayout, device: BluetoothDevice, isPaired: Boolean) {

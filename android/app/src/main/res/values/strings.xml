@@ -51,6 +51,9 @@
     <string name="device_scan_button">Scan for Devices</string>
     <string name="device_scan_stop_button">Stop Scanning</string>
     <string name="device_scan_start_failed">Could not start scanning — try again</string>
+    <string name="device_scan_found_count">Scanning… (%1$d found)</string>
+    <string name="device_scan_finished_count">Scan finished — %1$d found</string>
+    <string name="location_services_required">Location Services must be on for scanning to find devices</string>
     <string name="device_scan_paired_section">Paired Devices</string>
     <string name="device_scan_available_section">Nearby Devices</string>
     <string name="device_scan_pairing">Pairing…</string>
