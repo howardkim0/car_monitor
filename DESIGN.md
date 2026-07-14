@@ -136,6 +136,31 @@ business logic requiring a Go round-trip.
    never needs to know what a PID is. *How often* to poll is, for v1, a
    plain constant in `ObdForegroundService` (`Session`/`Commands()` carries
    no timing info); see section 12 for moving that into Go too.
+
+   Before any of that, `writeLoop` first sends a fixed ELM327 setup
+   sequence once per connection — `obd2.InitCommands()` (`ATE0`, `ATL0`,
+   `ATS1`, `ATH0`, `ATSP0`), exposed to Kotlin as `Mobile.initCommandCount()`/
+   `initCommandAt(i)`, the same two-call pattern as `Commands()`/
+   `CommandAt(i)`. This exists because ELM327 settings (echo, linefeeds,
+   spacing, headers, protocol) are RAM-resident on the adapter and persist
+   across Bluetooth (dis)connects — connecting doesn't reset them. A prior
+   session, this app's or a different OBD2 app's (`ATH1`/headers-on is
+   common: many apps turn headers on deliberately, to distinguish
+   multi-ECU responses), can leave the adapter in a state
+   `parseResponseBytes` can't read: it requires space-separated
+   single-byte hex fields (`ATS1`, not the no-spaces `ATS0`) with no
+   leading header/CAN-ID field (`ATH0`) — a response like `7E8 04 41 0C 1A
+   F8` (headers on) fails outright, because `7E8` doesn't fit in a byte.
+   That failure is indistinguishable from ordinary ELM327 noise (skipped
+   silently, same as an echoed command or the `>` prompt), so a
+   misconfigured adapter previously produced a live, correctly-polling
+   session with zero decoded readings and zero error output — the
+   symptom that led here. Deliberately no `ATZ` (full reset): that would
+   fix the same problem but costs a real reset (~1-2s on some clones) on
+   every reconnect, including the frequent, transient ones the backoff
+   loop in section 7 already retries — the five explicit `AT` setting
+   commands above force the exact state the parser needs without paying
+   that cost.
 6. Separately from that live per-reading path, `ObdForegroundService` also
    runs a periodic coroutine loop (`anomalyCheckLoop`, alongside the read/
    write loops — `ANOMALY_CHECK_INTERVAL_MS`, currently 60s, the same
@@ -645,6 +670,16 @@ as a legitimate update to this app, so it's kept out of the repo entirely
   designed so this is additive.)
 - DTC (fault code) reading/clearing is out of scope for v1 but fits the
   same PID-request pattern in `internal/obd2`.
+- `obd2.InitCommands()` (section 4 step 5) deliberately sends five
+  explicit `AT` setting commands instead of a full `ATZ` reset, on the
+  reasoning that each applies immediately without needing a reset —
+  standard ELM327 semantics, but unverified against real/clone hardware
+  in this dev environment (no Bluetooth device access, same caveat as
+  `COMMAND_INTERVAL_MS` below): some cheap clones are known to have
+  firmware quirks where a command like `ATSP0` doesn't fully re-trigger
+  protocol auto-search without a preceding reset. If a real device still
+  shows the zero-readings symptom this was meant to fix, `ATZ` (accepting
+  the ~1-2s reset cost on every reconnect) is the fallback to try.
 - Long-term storage growth: day-rotated CSV (section 6.1) is fine for
   early use; revisit if per-file size or cross-day query needs grow
   (SQLite via a pure-Go driver to avoid reintroducing cgo/NDK complexity
