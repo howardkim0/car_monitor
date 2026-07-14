@@ -1,9 +1,10 @@
 // Package gitbackup backs up on-device logs to a remote git repository,
 // persisting state across Bluetooth reconnects so logs are synced on a
-// file-rotation or hourly basis, whichever comes first.
+// file-rotation or 5-minute basis, whichever comes first.
 package gitbackup
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -19,8 +20,9 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/transport/ssh"
 )
 
-const remoteURL = "git@github.com:howardkim0/car_monitor_logs.git"
-const syncInterval = 1 * time.Hour
+var remoteURL = "git@github.com:howardkim0/car_monitor_logs.git"
+
+const syncInterval = 5 * time.Minute
 
 // gitClient abstracts git operations so they can be faked in tests.
 type gitClient interface {
@@ -63,7 +65,7 @@ func NewSyncer(repoDir, keyPath string) *Syncer {
 // SyncIfNeeded checks whether a new reading-log file has appeared
 // (readingsDir's current-day filename differs from the last sync) or
 // syncInterval has elapsed since the last successful sync, and if so,
-// copies readings-*.csv + app.log into the local clone and pushes.
+// performs a sync via doSync.
 //
 // A no-op, returning nil, if neither condition holds. All git/network
 // failures are returned as errors for the caller to log — never panics,
@@ -83,6 +85,29 @@ func (s *Syncer) SyncIfNeeded(readingsDir, appLogPath string) error {
 	if !shouldSync {
 		return nil
 	}
+
+	return s.doSync(readingsDir, appLogPath)
+}
+
+// SyncNow performs the same clone/copy/commit/push sequence as SyncIfNeeded
+// but without the gate check — it always attempts a sync, regardless of
+// whether a new file has appeared or the interval has elapsed. Used for
+// the manual "Git Push" button (DESIGN.md section 7) so a user can confirm
+// backup is working without waiting for the next automatic check.
+func (s *Syncer) SyncNow(readingsDir, appLogPath string) error {
+	return s.doSync(readingsDir, appLogPath)
+}
+
+// doSync performs the actual sync logic: open/clone the repo, copy logs,
+// commit and push. Only updates lastFile/lastSynced on success.
+func (s *Syncer) doSync(readingsDir, appLogPath string) error {
+	// Determine today's current reading-log filename to update state on success.
+	currentFile, err := currentReadingFile(readingsDir)
+	if err != nil {
+		return fmt.Errorf("find current reading file: %w", err)
+	}
+
+	now := s.clock()
 
 	// Open or clone the repository.
 	repo, err := s.git.openOrClone(s.repoDir, remoteURL, s.keyPath)
@@ -210,6 +235,15 @@ var createRemoteFunc = func(repo *git.Repository, cfg *config.RemoteConfig) (*gi
 // right after isn't practically reachable without this seam.
 var plainInitFunc = git.PlainInit
 
+// networkTimeout bounds how long a single clone/push network operation
+// may run — exposed as a var (same reasoning as authMethodFunc etc.)
+// so tests can force it to expire immediately instead of waiting for a
+// slow real timeout. 30s is generous for a small repo push over a weak
+// connection while staying well under the 5-minute sync cadence, so a
+// hung attempt (no cell service — the motivating case, DESIGN.md
+// section 7) fails fast instead of occupying the sync loop.
+var networkTimeout = 30 * time.Second
+
 // worktreeStatusFunc computes a worktree's status; exposed as a
 // package-level variable (same reasoning as plainInitFunc) so tests can
 // force commitAndPush's "get status" error path. A real Status() failure
@@ -233,7 +267,9 @@ func (c *realGitClient) openOrClone(repoDir, remoteURL, keyPath string) (*git.Re
 		return nil, fmt.Errorf("load SSH key: %w", err)
 	}
 
-	repo, err = git.PlainClone(repoDir, false, &git.CloneOptions{
+	ctx, cancel := context.WithTimeout(context.Background(), networkTimeout)
+	defer cancel()
+	repo, err = git.PlainCloneContext(ctx, repoDir, false, &git.CloneOptions{
 		URL:  remoteURL,
 		Auth: authMethod,
 	})
@@ -308,7 +344,9 @@ func (c *realGitClient) commitAndPush(repo *git.Repository, keyPath, message str
 	// this path — the status.IsClean() check above already returned early
 	// for "nothing changed," so by the time we reach Push(), wt.Commit()
 	// has just created a new commit the remote cannot already have.
-	if err := repo.Push(&git.PushOptions{Auth: authMethod}); err != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), networkTimeout)
+	defer cancel()
+	if err := repo.PushContext(ctx, &git.PushOptions{Auth: authMethod}); err != nil {
 		return false, fmt.Errorf("push: %w", err)
 	}
 

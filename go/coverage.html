@@ -1,0 +1,534 @@
+
+<!DOCTYPE html>
+<html>
+	<head>
+		<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+		<title>obd2: Go Coverage Report</title>
+		<style>
+			body {
+				background: black;
+				color: rgb(80, 80, 80);
+			}
+			body, pre, #legend span {
+				font-family: Menlo, monospace;
+				font-weight: bold;
+			}
+			#topbar {
+				background: black;
+				position: fixed;
+				top: 0; left: 0; right: 0;
+				height: 42px;
+				border-bottom: 1px solid rgb(80, 80, 80);
+			}
+			#content {
+				margin-top: 50px;
+			}
+			#nav, #legend {
+				float: left;
+				margin-left: 10px;
+			}
+			#legend {
+				margin-top: 12px;
+			}
+			#nav {
+				margin-top: 10px;
+			}
+			#legend span {
+				margin: 0 5px;
+			}
+			.cov0 { color: rgb(192, 0, 0) }
+.cov1 { color: rgb(128, 128, 128) }
+.cov2 { color: rgb(116, 140, 131) }
+.cov3 { color: rgb(104, 152, 134) }
+.cov4 { color: rgb(92, 164, 137) }
+.cov5 { color: rgb(80, 176, 140) }
+.cov6 { color: rgb(68, 188, 143) }
+.cov7 { color: rgb(56, 200, 146) }
+.cov8 { color: rgb(44, 212, 149) }
+.cov9 { color: rgb(32, 224, 152) }
+.cov10 { color: rgb(20, 236, 155) }
+
+		</style>
+	</head>
+	<body>
+		<div id="topbar">
+			<div id="nav">
+				<select id="files">
+				
+				<option value="file0">github.com/howardkim0/car_monitor/go/internal/obd2/obd2.go (99.2%)</option>
+				
+				</select>
+			</div>
+			<div id="legend">
+				<span>not tracked</span>
+			
+				<span class="cov0">not covered</span>
+				<span class="cov8">covered</span>
+			
+			</div>
+		</div>
+		<div id="content">
+		
+		<pre class="file" id="file0" style="display: none">// Package obd2 frames ELM327 requests and parses ELM327 responses into
+// decoded Readings, driven by an active vehicle.Profile. It has no
+// knowledge of the underlying transport (Bluetooth socket, etc.) — see
+// DESIGN.md section 4: the Android shell owns the socket and just feeds
+// raw bytes in and pulls commands to send out.
+package obd2
+
+import (
+        "bytes"
+        "fmt"
+        "sort"
+        "strconv"
+        "strings"
+        "sync"
+        "time"
+
+        "github.com/howardkim0/car_monitor/go/internal/vehicle"
+)
+
+// logfFunc is the type of the optional diagnostic logger injected into
+// Session. Matches fmt.Sprintf's signature so callers can pass any
+// printf-style function (e.g. applog.Logger.Debugf).
+type logfFunc func(format string, args ...any)
+
+// terminator is the line ending ELM327 uses in both directions.
+const terminator = '\r'
+
+// rawLineSampleLimit bounds how many raw line contents are logged for
+// diagnostics. The first rawLineSampleLimit lines (regardless of whether
+// they parse successfully) are logged with their exact byte content quoted,
+// to provide visibility into exactly what arrived from the adapter.
+// Beyond this limit, no raw lines are logged, only aggregate statistics —
+// keeping logs focused on first-time startup diagnostics (DESIGN.md §12).
+const rawLineSampleLimit = 20
+
+// statsLogEveryNLines fires a statistics log every statsLogEveryNLines
+// lines received, reporting cumulative counts and decode percentage. This
+// provides visibility into data reception vs. decoding rates over time
+// without flooding the log with per-line noise (DESIGN.md §12).
+const statsLogEveryNLines = 100
+
+// discoveryTimeout bounds how long Session waits for "PIDs supported"
+// bitmask responses (see below) before falling back to treating any
+// still-unresolved range as fully supported, rather than going silent.
+// A var, not a const, so tests can override it rather than sleeping for
+// the real default.
+var discoveryTimeout = 5 * time.Second
+
+// Reading is one decoded value read from the vehicle at a point in time.
+type Reading struct {
+        PID       byte      `json:"pid"`
+        Name      string    `json:"name"`
+        Value     float64   `json:"value"`
+        Unit      string    `json:"unit"`
+        Timestamp time.Time `json:"timestamp"`
+}
+
+// Session tracks the active vehicle profile and buffers partial input
+// while decoding a stream of ELM327 response lines into Readings.
+//
+// It also drives a two-phase command lifecycle. Rather than
+// unconditionally requesting every PID in the profile every cycle (fine
+// for 4 PIDs, wasteful for dozens — see DESIGN.md section 5.2),
+// Commands() initially returns only SAE J1979 "PIDs supported" discovery
+// queries (Mode 01 PIDs 0x00/0x20/0x40/...). Once the ECU's bitmask
+// responses (or discoveryTimeout) resolve which of the profile's PIDs it
+// actually supports, Commands() switches over to the real, filtered
+// per-PID request list. The caller (Kotlin's write loop) doesn't need to
+// know any of this — it just keeps polling Commands() every cycle; Go
+// owns the phase transition entirely.
+//
+// mu guards the discovery/command-cache state below because Commands()
+// and Feed() are called from different concurrent goroutines in
+// practice (ObdForegroundService.kt's writeLoop and readLoop run as
+// sibling coroutines) — profile/onReading are set once at construction
+// and never mutated, so they don't need it.
+type Session struct {
+        profile   vehicle.Profile
+        onReading func(Reading)
+        pending   []byte
+
+        // logf is an optional diagnostic logger — nil by default so
+        // NewSession callers (tests included) are unaffected. Set via
+        // NewSessionWithLogger when the caller wants discovery/polling
+        // diagnostics (e.g. mobile.go wires this to LogDebug so they land
+        // in the persistent app log for real-hardware verification — see
+        // DESIGN.md section 12).
+        logf logfFunc
+
+        // linesReceived and linesDecoded track raw reception vs. successful
+        // parsing for content diagnostics (DESIGN.md §12). Feed() increments
+        // linesReceived for every extracted line and linesDecoded whenever
+        // parseLine succeeds, enabling real-time visibility into adapter
+        // behavior: e.g. "received 300 lines but only decoded 240" reveals
+        // a high noise/truncation rate. These fields are guarded by no mutex —
+        // Feed() is always called sequentially from a single goroutine
+        // (ObdForegroundService's readLoop), so no concurrency protection needed.
+        linesReceived uint64
+        linesDecoded  uint64
+
+        mu               sync.Mutex
+        discoveryStart   time.Time
+        unresolvedRanges map[byte]bool // discovery-query PID -&gt; still awaiting a response
+        supported        map[byte]bool // profile PID code -&gt; confirmed supported by the ECU
+        commands         []string      // cached once discovery completes; nil until then
+}
+
+// NewSession creates a Session that decodes responses against profile,
+// invoking onReading for every successfully decoded line. onReading may be
+// nil if the caller only cares about Commands().
+func NewSession(profile vehicle.Profile, onReading func(Reading)) *Session <span class="cov8" title="1">{
+        return NewSessionWithLogger(profile, onReading, nil)
+}</span>
+
+// NewSessionWithLogger is NewSession with an optional diagnostic logger.
+// logf (which may be nil) is called with printf-style arguments at key
+// discovery/polling lifecycle events — starting discovery, each range
+// resolving, and the final transition to the per-PID command list. This
+// is the hook mobile.go uses to route those messages into the persistent
+// app log for real-hardware ELM327 verification (DESIGN.md section 12).
+func NewSessionWithLogger(profile vehicle.Profile, onReading func(Reading), logf logfFunc) *Session <span class="cov8" title="1">{
+        s := &amp;Session{
+                profile:          profile,
+                onReading:        onReading,
+                logf:             logf,
+                discoveryStart:   time.Now(),
+                unresolvedRanges: discoveryRanges(profile),
+                supported:        make(map[byte]bool),
+        }
+        if logf != nil </span><span class="cov8" title="1">{
+                logf("obd2: discovery starting: %d ranges to resolve (%v)",
+                        len(s.unresolvedRanges), discoveryRangeList(s.unresolvedRanges))
+        }</span>
+        <span class="cov8" title="1">return s</span>
+}
+
+// discoveryRangeList returns a sorted slice of range base values for
+// logging — makes the log line deterministic instead of map-iteration-order.
+func discoveryRangeList(ranges map[byte]bool) []string <span class="cov8" title="1">{
+        bases := make([]byte, 0, len(ranges))
+        for b := range ranges </span><span class="cov8" title="1">{
+                bases = append(bases, b)
+        }</span>
+        <span class="cov8" title="1">sort.Slice(bases, func(i, j int) bool </span><span class="cov8" title="1">{ return bases[i] &lt; bases[j] }</span>)
+        <span class="cov8" title="1">strs := make([]string, len(bases))
+        for i, b := range bases </span><span class="cov8" title="1">{
+                strs[i] = fmt.Sprintf("0x%02X", b)
+        }</span>
+        <span class="cov8" title="1">return strs</span>
+}
+
+// discoveryRanges returns the "PIDs supported" query PIDs (0x00, 0x20,
+// 0x40, ...) needed to cover every PID code present in profile — derived
+// from the profile rather than hardcoded, so it self-adjusts if the PID
+// table changes.
+func discoveryRanges(profile vehicle.Profile) map[byte]bool <span class="cov8" title="1">{
+        var maxCode int
+        for _, p := range profile.PIDs </span><span class="cov8" title="1">{
+                if int(p.Code) &gt; maxCode </span><span class="cov8" title="1">{
+                        maxCode = int(p.Code)
+                }</span>
+        }
+        // int, not byte: base ranges up to 0xE0 inclusive (8 possible ranges
+        // in the 0x00-0xFF PID space), and 0xE0+0x20 == 0x100 overflows a
+        // byte — using byte arithmetic here wraps back to 0x00 and never
+        // satisfies "base &lt;= maxCode", hanging this loop forever for any
+        // profile PID code &gt;= 0xE0.
+        <span class="cov8" title="1">ranges := make(map[byte]bool)
+        for base := 0; base &lt;= maxCode; base += 0x20 </span><span class="cov8" title="1">{
+                ranges[byte(base)] = true
+        }</span>
+        <span class="cov8" title="1">return ranges</span>
+}
+
+// Commands returns the ELM327 request lines to send this cycle: pending
+// discovery queries while any "PIDs supported" range is still
+// unresolved, or the real filtered per-PID requests once discovery has
+// completed (by response or by discoveryTimeout elapsing). The caller
+// polls these on a timer, appends the terminator, and writes them to the
+// Bluetooth socket; Feed matches responses back up as they arrive.
+func (s *Session) Commands() []string <span class="cov8" title="1">{
+        s.mu.Lock()
+        defer s.mu.Unlock()
+
+        if s.commands != nil </span><span class="cov8" title="1">{
+                return s.commands
+        }</span>
+
+        <span class="cov8" title="1">if len(s.unresolvedRanges) &gt; 0 &amp;&amp; time.Since(s.discoveryStart) &lt; discoveryTimeout </span><span class="cov8" title="1">{
+                return discoveryCommands(s.unresolvedRanges)
+        }</span>
+
+        // Discovery is over, one way or another: apply the optimistic
+        // fallback to any range that never got a response (matches the old
+        // always-request-everything behavior instead of going silent if
+        // discovery itself fails for some reason), then compute and cache
+        // the real command list.
+        <span class="cov8" title="1">timedOutRanges := len(s.unresolvedRanges)
+        for base := range s.unresolvedRanges </span><span class="cov8" title="1">{
+                // int, not byte, for the same overflow reason as discoveryRanges:
+                // base+0x20 wraps for base == 0xE0.
+                lo, hi := int(base), int(base)+0x20
+                for _, p := range s.profile.PIDs </span><span class="cov8" title="1">{
+                        if int(p.Code) &gt; lo &amp;&amp; int(p.Code) &lt;= hi </span><span class="cov8" title="1">{
+                                s.supported[p.Code] = true
+                        }</span>
+                }
+        }
+        <span class="cov8" title="1">s.unresolvedRanges = nil
+
+        s.commands = buildCommands(s.profile, s.supported)
+        if s.logf != nil </span><span class="cov8" title="1">{
+                if timedOutRanges &gt; 0 </span><span class="cov8" title="1">{
+                        // Some ranges never got a bitmask response — fell back to
+                        // assuming all PIDs in those ranges are supported.
+                        s.logf("obd2: discovery timed out after %.1fs with %d unresolved range(s); "+
+                                "falling back to full profile (%d commands)",
+                                time.Since(s.discoveryStart).Seconds(), timedOutRanges, len(s.commands))
+                }</span> else<span class="cov8" title="1"> {
+                        s.logf("obd2: discovery complete via responses in %.1fs; "+
+                                "%d/%d profile PIDs confirmed supported (%d commands)",
+                                time.Since(s.discoveryStart).Seconds(),
+                                len(s.supported), len(s.profile.PIDs), len(s.commands))
+                }</span>
+        }
+        <span class="cov8" title="1">return s.commands</span>
+}
+
+func discoveryCommands(ranges map[byte]bool) []string <span class="cov8" title="1">{
+        bases := make([]byte, 0, len(ranges))
+        for base := range ranges </span><span class="cov8" title="1">{
+                bases = append(bases, base)
+        }</span>
+        <span class="cov8" title="1">sort.Slice(bases, func(i, j int) bool </span><span class="cov8" title="1">{ return bases[i] &lt; bases[j] }</span>)
+
+        <span class="cov8" title="1">cmds := make([]string, 0, len(bases))
+        for _, base := range bases </span><span class="cov8" title="1">{
+                cmds = append(cmds, fmt.Sprintf("%02X%02X", byte(vehicle.ModeCurrentData), base))
+        }</span>
+        <span class="cov8" title="1">return cmds</span>
+}
+
+// buildCommands renders the ELM327 request lines ("010C", "010D", ...)
+// for every PID in profile the ECU has confirmed supporting, in the
+// profile's stable order.
+func buildCommands(profile vehicle.Profile, supported map[byte]bool) []string <span class="cov8" title="1">{
+        cmds := make([]string, 0, len(profile.PIDs))
+        for _, p := range profile.PIDs </span><span class="cov8" title="1">{
+                if !supported[p.Code] </span><span class="cov8" title="1">{
+                        continue</span>
+                }
+                <span class="cov8" title="1">cmds = append(cmds, fmt.Sprintf("%02X%02X", byte(p.Mode), p.Code))</span>
+        }
+        <span class="cov8" title="1">return cmds</span>
+}
+
+// InitCommands returns the fixed ELM327 setup sequence sent once per
+// connection, before any PID/discovery command — see DESIGN.md section 4
+// step 5 for why. ATS1 and ATH0 are load-bearing: parseResponseBytes
+// requires space-separated single-byte hex fields with no header/CAN-ID
+// field, and a prior session (this app's or a different one's) can leave
+// the adapter with either turned off/on the wrong way, since ELM327
+// settings persist across Bluetooth reconnects.
+func InitCommands() []string <span class="cov8" title="1">{
+        return []string{"ATE0", "ATL0", "ATS1", "ATH0", "ATSP0"}
+}</span>
+
+// Feed appends newly-read bytes from the Bluetooth socket and processes
+// every complete (terminator-delimited) line. Partial lines are buffered
+// until the remainder arrives in a later call.
+//
+// Content diagnostics: Feed tracks raw reception and successful parsing
+// rates for visibility into adapter behavior (DESIGN.md §12). The first
+// rawLineSampleLimit lines have their exact byte content logged, and
+// every statsLogEveryNLines lines a cumulative log reports received vs.
+// decoded counts and the decode percentage.
+func (s *Session) Feed(data []byte) <span class="cov8" title="1">{
+        s.pending = append(s.pending, data...)
+        for </span><span class="cov8" title="1">{
+                idx := bytes.IndexByte(s.pending, terminator)
+                if idx == -1 </span><span class="cov8" title="1">{
+                        break</span>
+                }
+                <span class="cov8" title="1">line := s.pending[:idx]
+                s.pending = s.pending[idx+1:]
+
+                // Track reception: every line extracted increments the count.
+                s.linesReceived++
+
+                // Log raw line content for the first rawLineSampleLimit lines,
+                // regardless of whether it later parses successfully — provides
+                // initial visibility into what the adapter is actually sending.
+                if s.logf != nil &amp;&amp; s.linesReceived &lt;= uint64(rawLineSampleLimit) </span><span class="cov8" title="1">{
+                        s.logf("obd2: raw line %d: %q", s.linesReceived, string(line))
+                }</span>
+
+                <span class="cov8" title="1">if s.tryHandleDiscoveryResponse(string(line)) </span><span class="cov8" title="1">{
+                        // Discovery responses don't decode to Readings, but check for
+                        // stats log anyway (a discovery response still counts as "received").
+                        if s.logf != nil &amp;&amp; s.linesReceived%uint64(statsLogEveryNLines) == 0 </span><span class="cov0" title="0">{
+                                s.logf("obd2: stats: %d lines received, %d decoded as readings (%.0f%%)",
+                                        s.linesReceived, s.linesDecoded, float64(s.linesDecoded)/float64(s.linesReceived)*100)
+                        }</span>
+                        <span class="cov8" title="1">continue</span>
+                }
+
+                // Track decoding: increment whenever parseLine succeeds, regardless
+                // of whether onReading is nil (the counter tracks "successfully decoded",
+                // not "delivered to listener").
+                <span class="cov8" title="1">if reading, ok := s.parseLine(string(line)); ok </span><span class="cov8" title="1">{
+                        s.linesDecoded++
+                        if s.onReading != nil </span><span class="cov8" title="1">{
+                                s.onReading(reading)
+                        }</span>
+                }
+
+                // Log statistics every statsLogEveryNLines lines after decoding
+                // (so stats reflect the just-incremented linesDecoded).
+                <span class="cov8" title="1">if s.logf != nil &amp;&amp; s.linesReceived%uint64(statsLogEveryNLines) == 0 </span><span class="cov8" title="1">{
+                        s.logf("obd2: stats: %d lines received, %d decoded as readings (%.0f%%)",
+                                s.linesReceived, s.linesDecoded, float64(s.linesDecoded)/float64(s.linesReceived)*100)
+                }</span>
+        }
+        <span class="cov8" title="1">if len(s.pending) == 0 </span><span class="cov8" title="1">{
+                // Drop the reference to the (possibly large, reallocated) backing
+                // array once every line has been consumed, instead of letting a
+                // long-running session's buffer only ever grow via append.
+                s.pending = nil
+        }</span>
+}
+
+// tryHandleDiscoveryResponse checks whether line answers one of the
+// still-pending "PIDs supported" queries; if so, it decodes the 32-bit
+// bitmask (byte A bit 7 == PID base+1, ... byte D bit 0 == PID base+32,
+// per the SAE J1979 convention), marks matching profile PIDs supported,
+// resolves that range, and returns true so Feed skips the normal
+// Reading-decode path — a bitmask isn't vehicle telemetry.
+func (s *Session) tryHandleDiscoveryResponse(line string) bool <span class="cov8" title="1">{
+        s.mu.Lock()
+        defer s.mu.Unlock()
+
+        if len(s.unresolvedRanges) == 0 </span><span class="cov8" title="1">{
+                return false
+        }</span>
+
+        <span class="cov8" title="1">raw, ok := parseResponseBytes(line)
+        if !ok || len(raw) &lt; 6 </span><span class="cov8" title="1">{
+                return false
+        }</span>
+
+        <span class="cov8" title="1">base := raw[1]
+        if !s.unresolvedRanges[base] </span><span class="cov8" title="1">{
+                return false
+        }</span>
+
+        <span class="cov8" title="1">mask := uint32(raw[2])&lt;&lt;24 | uint32(raw[3])&lt;&lt;16 | uint32(raw[4])&lt;&lt;8 | uint32(raw[5])
+        for k := 0; k &lt; 32; k++ </span><span class="cov8" title="1">{
+                if (mask&gt;&gt;(31-k))&amp;1 != 1 </span><span class="cov8" title="1">{
+                        continue</span>
+                }
+                // int, not byte: base+1+k overflows a byte for base == 0xE0,
+                // k == 31 (would be PID code 0x100). That 32nd bit of the last
+                // possible range has no corresponding PID — SAE only defines
+                // codes 0x00-0xFF — so it's simply skipped rather than wrapped
+                // into a bogus low PID code.
+                <span class="cov8" title="1">code := int(base) + 1 + k
+                if code &lt;= 0xFF </span><span class="cov8" title="1">{
+                        s.supported[byte(code)] = true
+                }</span>
+        }
+        <span class="cov8" title="1">delete(s.unresolvedRanges, base)
+        s.commands = nil // force Commands() to recompute now that a range resolved
+        if s.logf != nil </span><span class="cov8" title="1">{
+                s.logf("obd2: discovery range 0x%02X resolved: %d PIDs marked supported so far; %d range(s) still pending",
+                        base, len(s.supported), len(s.unresolvedRanges))
+        }</span>
+        <span class="cov8" title="1">return true</span>
+}
+
+// parseResponseBytes splits a response line into raw hex bytes and
+// confirms it's a positive response to a mode 01-09 request. Anything
+// that isn't — the "&gt;" prompt, "SEARCHING...", "NO DATA", command echo,
+// blank lines — fails this and is ignored by both callers below.
+func parseResponseBytes(line string) ([]byte, bool) <span class="cov8" title="1">{
+        fields := strings.Fields(line)
+        if len(fields) &lt; 2 </span><span class="cov8" title="1">{
+                return nil, false
+        }</span>
+
+        <span class="cov8" title="1">raw := make([]byte, 0, len(fields))
+        for _, f := range fields </span><span class="cov8" title="1">{
+                b, err := strconv.ParseUint(f, 16, 8)
+                if err != nil </span><span class="cov8" title="1">{
+                        return nil, false
+                }</span>
+                <span class="cov8" title="1">raw = append(raw, byte(b))</span>
+        }
+
+        <span class="cov8" title="1">if raw[0] &lt; 0x41 || raw[0] &gt; 0x49 </span><span class="cov8" title="1">{
+                return nil, false // not a positive response to a mode 01-09 request
+        }</span>
+        <span class="cov8" title="1">return raw, true</span>
+}
+
+// parseLine parses one ELM327 response line, e.g. "41 0C 1A F8", into a
+// Reading.
+func (s *Session) parseLine(line string) (Reading, bool) <span class="cov8" title="1">{
+        raw, ok := parseResponseBytes(line)
+        if !ok </span><span class="cov8" title="1">{
+                return Reading{}, false
+        }</span>
+
+        <span class="cov8" title="1">pidCode := raw[1]
+        pid, ok := s.profile.PID(pidCode)
+        if !ok </span><span class="cov8" title="1">{
+                return Reading{}, false
+        }</span>
+
+        <span class="cov8" title="1">value, err := pid.Decode(raw[2:])
+        if err != nil </span><span class="cov8" title="1">{
+                return Reading{}, false
+        }</span>
+
+        <span class="cov8" title="1">return Reading{
+                PID:       pidCode,
+                Name:      pid.Name,
+                Value:     value,
+                Unit:      pid.Unit,
+                Timestamp: time.Now().UTC(),
+        }, true</span>
+}
+</pre>
+		
+		</div>
+	</body>
+	<script>
+	(function() {
+		var files = document.getElementById('files');
+		var visible;
+		files.addEventListener('change', onChange, false);
+		function select(part) {
+			if (visible)
+				visible.style.display = 'none';
+			visible = document.getElementById(part);
+			if (!visible)
+				return;
+			files.value = part;
+			visible.style.display = 'block';
+			location.hash = part;
+		}
+		function onChange() {
+			select(files.value);
+			window.scrollTo(0, 0);
+		}
+		if (location.hash != "") {
+			select(location.hash.substr(1));
+		}
+		if (!visible) {
+			select("file0");
+		}
+	})();
+	</script>
+</html>

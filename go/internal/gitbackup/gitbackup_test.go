@@ -54,7 +54,7 @@ func TestSyncIfNeededNoOpWhenNeitherConditionHolds(t *testing.T) {
 		repoDir:    filepath.Join(dir, "repo"),
 		keyPath:    "/fake/key",
 		lastFile:   "readings-2006-01-02.csv",
-		lastSynced: now,
+		lastSynced: now.Add(-2 * time.Minute), // 2 minutes ago (well under the 5-minute interval)
 		clock:      func() time.Time { return now },
 		git:        fakeGit,
 	}
@@ -95,14 +95,14 @@ func TestSyncIfNeededFiresOnNewFile(t *testing.T) {
 	}
 }
 
-func TestSyncIfNeededFiresOnHourlyElapsed(t *testing.T) {
+func TestSyncIfNeededFiresOnIntervalElapsed(t *testing.T) {
 	dir := t.TempDir()
 	readingsDir := filepath.Join(dir, "readings")
 	mustMkdirAll(t, readingsDir)
 	mustWriteFile(t, filepath.Join(readingsDir, "readings-2006-01-02.csv"), "header\n")
 
 	lastSyncedTime := time.Date(2006, 1, 2, 11, 0, 0, 0, time.UTC)
-	currentTime := time.Date(2006, 1, 2, 12, 30, 0, 0, time.UTC) // 1.5 hours later
+	currentTime := time.Date(2006, 1, 2, 11, 6, 0, 0, time.UTC) // 6 minutes later (just over the 5-minute interval)
 
 	fakeGit := &fakeGitClient{}
 	syncer := &Syncer{
@@ -304,6 +304,207 @@ func TestNewSyncerReturnsRealDefaults(t *testing.T) {
 	}
 	if _, ok := syncer.git.(*realGitClient); !ok {
 		t.Errorf("NewSyncer's default git client is %T, want *realGitClient", syncer.git)
+	}
+}
+
+// --- SyncNow ---
+
+func TestSyncNowBypassesGateAndAlwaysSyncs(t *testing.T) {
+	dir := t.TempDir()
+	readingsDir := filepath.Join(dir, "readings")
+	mustMkdirAll(t, readingsDir)
+	mustWriteFile(t, filepath.Join(readingsDir, "readings-2006-01-02.csv"), "header\n")
+
+	now := time.Date(2006, 1, 2, 12, 0, 0, 0, time.UTC)
+	fakeGit := &fakeGitClient{}
+	syncer := &Syncer{
+		repoDir:    filepath.Join(dir, "repo"),
+		keyPath:    "/fake/key",
+		lastFile:   "readings-2006-01-02.csv",
+		lastSynced: now, // no time has passed, and file hasn't changed
+		clock:      func() time.Time { return now },
+		git:        fakeGit,
+	}
+
+	// SyncIfNeeded would be a no-op in this state.
+	if err := syncer.SyncIfNeeded(readingsDir, filepath.Join(dir, "app.log")); err != nil {
+		t.Fatalf("SyncIfNeeded: %v", err)
+	}
+	if fakeGit.openOrCloneCalls != 0 || fakeGit.commitAndPushCalls != 0 {
+		t.Errorf("SyncIfNeeded should be a no-op, got openOrClone=%d commitAndPush=%d", fakeGit.openOrCloneCalls, fakeGit.commitAndPushCalls)
+	}
+
+	// But SyncNow should proceed regardless.
+	fakeGit.openOrCloneCalls = 0
+	fakeGit.commitAndPushCalls = 0
+	if err := syncer.SyncNow(readingsDir, filepath.Join(dir, "app.log")); err != nil {
+		t.Fatalf("SyncNow: %v", err)
+	}
+	if fakeGit.openOrCloneCalls != 1 || fakeGit.commitAndPushCalls != 1 {
+		t.Errorf("SyncNow should bypass gate, got openOrClone=%d commitAndPush=%d", fakeGit.openOrCloneCalls, fakeGit.commitAndPushCalls)
+	}
+}
+
+func TestSyncNowErrorDoesNotUpdateState(t *testing.T) {
+	dir := t.TempDir()
+	readingsDir := filepath.Join(dir, "readings")
+	mustMkdirAll(t, readingsDir)
+	mustWriteFile(t, filepath.Join(readingsDir, "readings-2006-01-03.csv"), "header\n")
+
+	now := time.Date(2006, 1, 3, 12, 0, 0, 0, time.UTC)
+	fakeGit := &fakeGitClient{commitAndPushErr: errors.New("push failed")}
+	syncer := &Syncer{
+		repoDir:    filepath.Join(dir, "repo"),
+		keyPath:    "/fake/key",
+		lastFile:   "readings-2006-01-02.csv",
+		lastSynced: now.Add(-2 * time.Hour),
+		clock:      func() time.Time { return now },
+		git:        fakeGit,
+	}
+
+	err := syncer.SyncNow(readingsDir, filepath.Join(dir, "app.log"))
+	if err == nil || !strings.Contains(err.Error(), "commit and push") {
+		t.Fatalf("SyncNow err = %v, want it to contain \"commit and push\"", err)
+	}
+	if syncer.lastFile != "readings-2006-01-02.csv" || syncer.lastSynced != now.Add(-2*time.Hour) {
+		t.Errorf("state changed after a failed SyncNow: lastFile=%q lastSynced=%v, want unchanged", syncer.lastFile, syncer.lastSynced)
+	}
+}
+
+func TestSyncNowCurrentReadingFileErrorDoesNotUpdateState(t *testing.T) {
+	dir := t.TempDir()
+	// readingsDir is a plain file, not a directory, so currentReadingFile fails.
+	readingsDir := filepath.Join(dir, "readings-as-file")
+	mustWriteFile(t, readingsDir, "x")
+
+	now := time.Date(2006, 1, 3, 12, 0, 0, 0, time.UTC)
+	fakeGit := &fakeGitClient{}
+	syncer := &Syncer{
+		repoDir:    filepath.Join(dir, "repo"),
+		keyPath:    "/fake/key",
+		lastFile:   "readings-2006-01-02.csv",
+		lastSynced: now.Add(-2 * time.Hour),
+		clock:      func() time.Time { return now },
+		git:        fakeGit,
+	}
+
+	err := syncer.SyncNow(readingsDir, filepath.Join(dir, "app.log"))
+	if err == nil || !strings.Contains(err.Error(), "find current reading file") {
+		t.Fatalf("SyncNow err = %v, want it to contain \"find current reading file\"", err)
+	}
+	if syncer.lastFile != "readings-2006-01-02.csv" || syncer.lastSynced != now.Add(-2*time.Hour) {
+		t.Errorf("state changed after a failed SyncNow: lastFile=%q lastSynced=%v, want unchanged", syncer.lastFile, syncer.lastSynced)
+	}
+	if fakeGit.openOrCloneCalls != 0 {
+		t.Errorf("openOrClone should not be called when currentReadingFile fails")
+	}
+}
+
+func TestSyncNowRealGitClientFullCycle(t *testing.T) {
+	root := t.TempDir()
+	bareDir := filepath.Join(root, "bare.git")
+	if _, err := git.PlainInit(bareDir, true); err != nil {
+		t.Fatalf("PlainInit bare: %v", err)
+	}
+	keyPath := generateTestKey(t)
+
+	// Override remoteURL so SyncNow uses the local bare repo instead of GitHub.
+	oldRemoteURL := remoteURL
+	remoteURL = bareDir
+	t.Cleanup(func() { remoteURL = oldRemoteURL })
+
+	repoDir := filepath.Join(root, "repo")
+	readingsDir := filepath.Join(root, "readings")
+	mustMkdirAll(t, readingsDir)
+	mustWriteFile(t, filepath.Join(readingsDir, "readings-2006-01-02.csv"), "header\n")
+	appLogPath := filepath.Join(root, "app.log")
+	mustWriteFile(t, appLogPath, "log\n")
+
+	now := time.Date(2006, 1, 2, 12, 0, 0, 0, time.UTC)
+	syncer := &Syncer{
+		repoDir:    repoDir,
+		keyPath:    keyPath,
+		lastFile:   "", // no prior sync, forcing doSync to get the current file
+		lastSynced: now.Add(-10 * time.Hour),
+		clock:      func() time.Time { return now },
+		git:        &realGitClient{},
+	}
+
+	// First SyncNow creates and pushes.
+	if err := syncer.SyncNow(readingsDir, appLogPath); err != nil {
+		t.Fatalf("first SyncNow: %v", err)
+	}
+	if syncer.lastFile != "readings-2006-01-02.csv" {
+		t.Errorf("lastFile = %q, want readings-2006-01-02.csv", syncer.lastFile)
+	}
+	if syncer.lastSynced != now {
+		t.Errorf("lastSynced = %v, want %v", syncer.lastSynced, now)
+	}
+
+	// Verify state was updated.
+	if syncer.lastFile == "" || syncer.lastSynced.Year() != 2006 {
+		t.Fatalf("SyncNow didn't update state: lastFile=%q lastSynced=%v", syncer.lastFile, syncer.lastSynced)
+	}
+
+	// Verify the push worked by cloning again and checking for the files.
+	repoDir2 := filepath.Join(root, "repo2")
+	repo2, err := (&realGitClient{}).openOrClone(repoDir2, bareDir, keyPath)
+	if err != nil {
+		t.Fatalf("clone after SyncNow: %v", err)
+	}
+	if repo2 == nil {
+		t.Fatal("clone returned nil repo")
+	}
+	if _, err := os.Stat(filepath.Join(repoDir2, "logs", "readings-2006-01-02.csv")); err != nil {
+		t.Errorf("readings file not in cloned repo: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(repoDir2, "logs", "app.log")); err != nil {
+		t.Errorf("app.log not in cloned repo: %v", err)
+	}
+}
+
+func TestNetworkTimeoutEnforced(t *testing.T) {
+	root := t.TempDir()
+	bareDir := filepath.Join(root, "bare.git")
+	if _, err := git.PlainInit(bareDir, true); err != nil {
+		t.Fatalf("PlainInit bare: %v", err)
+	}
+	keyPath := generateTestKey(t)
+
+	repoDir := filepath.Join(root, "repo")
+	readingsDir := filepath.Join(root, "readings")
+	mustMkdirAll(t, readingsDir)
+	mustWriteFile(t, filepath.Join(readingsDir, "readings-2006-01-02.csv"), "header\n")
+	appLogPath := filepath.Join(root, "app.log")
+
+	// Save the original timeout and restore it at the end.
+	oldTimeout := networkTimeout
+	networkTimeout = 1 * time.Nanosecond
+	t.Cleanup(func() { networkTimeout = oldTimeout })
+
+	realGit := &realGitClient{}
+	now := time.Date(2006, 1, 2, 12, 0, 0, 0, time.UTC)
+	syncer := &Syncer{
+		repoDir:    repoDir,
+		keyPath:    keyPath,
+		lastFile:   "",
+		lastSynced: now.Add(-10 * time.Hour),
+		clock:      func() time.Time { return now },
+		git:        realGit,
+	}
+
+	// With an absurdly short timeout, even a local bare repo should timeout.
+	err := syncer.SyncNow(readingsDir, appLogPath)
+	if err == nil {
+		t.Fatal("SyncNow should timeout with networkTimeout set to 1 nanosecond")
+	}
+	if !strings.Contains(err.Error(), "clone repo") && !strings.Contains(err.Error(), "context deadline exceeded") {
+		t.Errorf("err = %v, want it to contain \"clone repo\" or \"context deadline exceeded\"", err)
+	}
+
+	// State should not have been updated due to the error.
+	if syncer.lastFile != "" || syncer.lastSynced != now.Add(-10*time.Hour) {
+		t.Errorf("state should not have been updated on error")
 	}
 }
 

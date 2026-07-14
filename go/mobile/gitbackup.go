@@ -16,6 +16,7 @@ import (
 // newSessionWithStore's fake Store below).
 type gitLogSyncer interface {
 	SyncIfNeeded(readingsDir, appLogPath string) error
+	SyncNow(readingsDir, appLogPath string) error
 }
 
 // gitSyncer is package-level and independent of any Session deliberately:
@@ -29,8 +30,8 @@ var (
 )
 
 // SyncLogsIfNeeded backs up logs to car_monitor_logs.git if a new log
-// file has appeared or an hour has passed since the last sync. Safe to
-// call frequently (e.g. every few minutes) — it's a no-op otherwise.
+// file has appeared or the sync interval has elapsed since the last sync.
+// Safe to call frequently (e.g. every few minutes) — it's a no-op otherwise.
 // storageDir is the app's private storage root, same as NewSession.
 func SyncLogsIfNeeded(storageDir string) error {
 	syncer := currentOrCreateGitSyncer(storageDir)
@@ -40,6 +41,25 @@ func SyncLogsIfNeeded(storageDir string) error {
 		filepath.Join(storageDir, "app.log"),
 	); err != nil {
 		LogError(fmt.Sprintf("git backup sync: %v", err))
+		return err
+	}
+
+	return nil
+}
+
+// ForceSyncLogs performs an immediate, ungated push to car_monitor_logs.git,
+// regardless of whether the normal sync conditions (new file or interval elapsed)
+// hold. Used by the "Git Push" button on the status screen so a user can
+// confirm backup is working without waiting for the next automatic check.
+// storageDir is the app's private storage root, same as NewSession.
+func ForceSyncLogs(storageDir string) error {
+	syncer := currentOrCreateGitSyncer(storageDir)
+
+	if err := syncer.SyncNow(
+		filepath.Join(storageDir, "readings"),
+		filepath.Join(storageDir, "app.log"),
+	); err != nil {
+		LogError(fmt.Sprintf("git backup force sync: %v", err))
 		return err
 	}
 
