@@ -25,6 +25,20 @@ type logfFunc func(format string, args ...any)
 // terminator is the line ending ELM327 uses in both directions.
 const terminator = '\r'
 
+// rawLineSampleLimit bounds how many raw line contents are logged for
+// diagnostics. The first rawLineSampleLimit lines (regardless of whether
+// they parse successfully) are logged with their exact byte content quoted,
+// to provide visibility into exactly what arrived from the adapter.
+// Beyond this limit, no raw lines are logged, only aggregate statistics —
+// keeping logs focused on first-time startup diagnostics (DESIGN.md §12).
+const rawLineSampleLimit = 20
+
+// statsLogEveryNLines fires a statistics log every statsLogEveryNLines
+// lines received, reporting cumulative counts and decode percentage. This
+// provides visibility into data reception vs. decoding rates over time
+// without flooding the log with per-line noise (DESIGN.md §12).
+const statsLogEveryNLines = 100
+
 // discoveryTimeout bounds how long Session waits for "PIDs supported"
 // bitmask responses (see below) before falling back to treating any
 // still-unresolved range as fully supported, rather than going silent.
@@ -72,6 +86,17 @@ type Session struct {
 	// in the persistent app log for real-hardware verification — see
 	// DESIGN.md section 12).
 	logf logfFunc
+
+	// linesReceived and linesDecoded track raw reception vs. successful
+	// parsing for content diagnostics (DESIGN.md §12). Feed() increments
+	// linesReceived for every extracted line and linesDecoded whenever
+	// parseLine succeeds, enabling real-time visibility into adapter
+	// behavior: e.g. "received 300 lines but only decoded 240" reveals
+	// a high noise/truncation rate. These fields are guarded by no mutex —
+	// Feed() is always called sequentially from a single goroutine
+	// (ObdForegroundService's readLoop), so no concurrency protection needed.
+	linesReceived uint64
+	linesDecoded  uint64
 
 	mu               sync.Mutex
 	discoveryStart   time.Time
@@ -243,6 +268,12 @@ func InitCommands() []string {
 // Feed appends newly-read bytes from the Bluetooth socket and processes
 // every complete (terminator-delimited) line. Partial lines are buffered
 // until the remainder arrives in a later call.
+//
+// Content diagnostics: Feed tracks raw reception and successful parsing
+// rates for visibility into adapter behavior (DESIGN.md §12). The first
+// rawLineSampleLimit lines have their exact byte content logged, and
+// every statsLogEveryNLines lines a cumulative log reports received vs.
+// decoded counts and the decode percentage.
 func (s *Session) Feed(data []byte) {
 	s.pending = append(s.pending, data...)
 	for {
@@ -253,11 +284,35 @@ func (s *Session) Feed(data []byte) {
 		line := s.pending[:idx]
 		s.pending = s.pending[idx+1:]
 
-		if s.tryHandleDiscoveryResponse(string(line)) {
-			continue
+		// Track reception: every line extracted increments the count.
+		s.linesReceived++
+
+		// Log raw line content for the first rawLineSampleLimit lines,
+		// regardless of whether it later parses successfully — provides
+		// initial visibility into what the adapter is actually sending.
+		if s.logf != nil && s.linesReceived <= uint64(rawLineSampleLimit) {
+			s.logf("obd2: raw line %d: %q", s.linesReceived, string(line))
 		}
-		if reading, ok := s.parseLine(string(line)); ok && s.onReading != nil {
-			s.onReading(reading)
+
+		if s.tryHandleDiscoveryResponse(string(line)) {
+			// Discovery response was handled; skip the normal parsing path.
+		} else {
+			// Track decoding: increment whenever parseLine succeeds, regardless
+			// of whether onReading is nil (the counter tracks "successfully decoded",
+			// not "delivered to listener").
+			if reading, ok := s.parseLine(string(line)); ok {
+				s.linesDecoded++
+				if s.onReading != nil {
+					s.onReading(reading)
+				}
+			}
+		}
+
+		// Log statistics every statsLogEveryNLines lines, after discovery
+		// response handling and parsing have both had a chance to run.
+		if s.logf != nil && s.linesReceived%uint64(statsLogEveryNLines) == 0 {
+			s.logf("obd2: stats: %d lines received, %d decoded as readings (%.0f%%)",
+				s.linesReceived, s.linesDecoded, float64(s.linesDecoded)/float64(s.linesReceived)*100)
 		}
 	}
 	if len(s.pending) == 0 {

@@ -435,9 +435,16 @@ class ObdForegroundService : Service() {
         // ELM327 setup, once per connection, before any PID/discovery command
         // — see DESIGN.md section 4 step 5 for why this exists.
         for (i in 0 until Mobile.initCommandCount()) {
-            writeCommand(output, Mobile.initCommandAt(i))
+            val initCommand = Mobile.initCommandAt(i)
+            writeCommand(output, initCommand)
+            val initMsg = "writeLoop: sent init command $initCommand"
+            Log.d(TAG, initMsg)
+            Mobile.logDebug(initMsg)
             delay(COMMAND_INTERVAL_MS)
         }
+        val initDoneMsg = "writeLoop: init sequence complete (${Mobile.initCommandCount()} commands sent)"
+        Log.d(TAG, initDoneMsg)
+        Mobile.logDebug(initDoneMsg)
         while (currentCoroutineContext().isActive) {
             val cycleStart = SystemClock.elapsedRealtime()
             val commandCount = session.commandCount()

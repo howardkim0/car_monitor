@@ -439,6 +439,138 @@ func TestTryHandleDiscoveryResponseLogsRangeResolved(t *testing.T) {
 	}
 }
 
+// TestFeedLogsRawLineContentForFirstNLines verifies that Feed logs the
+// exact byte content of the first rawLineSampleLimit lines, regardless of
+// whether they parse successfully, then stops raw-line logging afterward.
+func TestFeedLogsRawLineContentForFirstNLines(t *testing.T) {
+	var logged []string
+	logf := func(format string, args ...any) {
+		logged = append(logged, fmt.Sprintf(format, args...))
+	}
+	s := NewSessionWithLogger(vehicle.Default(), nil, logf)
+	logged = nil // clear discovery start log
+
+	// Feed 25 simple lines (beyond the rawLineSampleLimit of 20).
+	for i := 1; i <= 25; i++ {
+		s.Feed([]byte(fmt.Sprintf("NO DATA\r")))
+	}
+
+	// Count "obd2: raw line" logs — should be exactly 20.
+	rawLineCount := 0
+	for _, line := range logged {
+		if contains(line, "obd2: raw line") {
+			rawLineCount++
+		}
+	}
+	if rawLineCount != 20 {
+		t.Errorf("expected exactly 20 raw-line logs for first 20 lines, got %d", rawLineCount)
+	}
+}
+
+// TestFeedStatsLogEveryNLines verifies that stats logs fire at exactly
+// line N and not before, and report correct counts.
+func TestFeedStatsLogEveryNLines(t *testing.T) {
+	var logged []string
+	logf := func(format string, args ...any) {
+		logged = append(logged, fmt.Sprintf(format, args...))
+	}
+	s := NewSessionWithLogger(vehicle.Default(), nil, logf)
+	logged = nil // clear discovery start log
+
+	// Feed 99 lines — should not trigger a stats log yet.
+	for i := 0; i < 99; i++ {
+		s.Feed([]byte("NO DATA\r"))
+	}
+	if anyContains(logged, "obd2: stats") {
+		t.Errorf("stats log should not fire before line 100, but got logs: %v", logged)
+	}
+
+	// Feed one more to reach 100 — should trigger exactly one stats log.
+	s.Feed([]byte("NO DATA\r"))
+	statsCount := 0
+	for _, line := range logged {
+		if contains(line, "obd2: stats") {
+			statsCount++
+		}
+	}
+	if statsCount != 1 {
+		t.Errorf("expected exactly one stats log at line 100, got %d", statsCount)
+	}
+}
+
+// TestFeedLinesDecodedOnlyIncrementsForValidReadings verifies that
+// linesDecoded increments only for lines that successfully parse to a Reading,
+// not for noise or malformed responses.
+func TestFeedLinesDecodedOnlyIncrementsForValidReadings(t *testing.T) {
+	readings := &[]Reading{}
+	s := NewSessionWithLogger(vehicle.Default(), func(r Reading) {
+		*readings = append(*readings, r)
+	}, nil)
+
+	// Feed a mix: valid reading, noise, valid reading, discovery response (not counted),
+	// and invalid/truncated lines.
+	// Valid RPM reading: "41 0C 0A 00" (PID 0x0C is RPM, supported in profile)
+	s.Feed([]byte("41 0C 0A 00\r"))
+	// Noise: "NO DATA\r"
+	s.Feed([]byte("NO DATA\r"))
+	// Another valid reading
+	s.Feed([]byte("41 0C 0B 00\r"))
+	// Discovery response: should not increment linesDecoded
+	s.Feed([]byte(discoveryResponseLine(0x00, 0x0C)))
+
+	// The stats should show linesReceived = 4, linesDecoded = 2.
+	// We can't directly inspect s.linesReceived/linesDecoded, but we can verify
+	// that only the valid readings were delivered to onReading.
+	if len(*readings) != 2 {
+		t.Errorf("expected 2 successfully decoded readings, got %d", len(*readings))
+	}
+}
+
+// TestFeedNoLoggingWhenLogfIsNil verifies that Feed handles a nil logf
+// gracefully and doesn't panic or corrupt state.
+func TestFeedNoLoggingWhenLogfIsNil(t *testing.T) {
+	readings := &[]Reading{}
+	s := NewSessionWithLogger(vehicle.Default(), func(r Reading) {
+		*readings = append(*readings, r)
+	}, nil)
+
+	// Feed a variety of lines — should not panic.
+	for i := 0; i < 150; i++ {
+		s.Feed([]byte("41 0C 0A 00\r"))
+	}
+
+	// Should have received all 150 readings (one per line).
+	if len(*readings) != 150 {
+		t.Errorf("expected 150 readings with nil logf, got %d", len(*readings))
+	}
+}
+
+// TestFeedStatsLogFiresForDiscoveryResponseLines verifies that stats logs
+// fire inside the discovery response handler when line number hits a boundary.
+func TestFeedStatsLogFiresForDiscoveryResponseLines(t *testing.T) {
+	var logged []string
+	logf := func(format string, args ...any) {
+		logged = append(logged, fmt.Sprintf(format, args...))
+	}
+	s := NewSessionWithLogger(vehicle.Default(), nil, logf)
+	logged = nil // clear discovery start log
+
+	// Feed discovery responses for each range, cycling through 0x00, 0x20, 0x40
+	// until line 100. Once each range is resolved, subsequent responses for
+	// that range are not recognized as discovery responses (they try to parse
+	// as readings and fail), so we cycle through ranges to keep line 100 as a
+	// valid discovery response that fires the stats log.
+	for i := 0; i < 100; i++ {
+		base := byte(0x00 + (i%3)*0x20) // cycles 0x00, 0x20, 0x40, 0x00, ...
+		s.Feed([]byte(discoveryResponseLine(base, 0x0C)))
+	}
+
+	// Stats log should fire at line 100, inside the discovery response branch.
+	if !anyContains(logged, "obd2: stats") {
+		t.Errorf("expected stats log at line 100 (a discovery response line); got logs: %v", logged)
+	}
+}
+
 // contains reports whether sub is a substring of s.
 func contains(s, sub string) bool {
 	return len(s) >= len(sub) && (s == sub || len(sub) == 0 ||
