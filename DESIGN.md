@@ -56,13 +56,13 @@ The practical split, and what this doc assumes:
   streams raw bytes into the Go library, and reads processed results back
   out. Also owns permissions, the persistent notification, boot-start, and
   a single status Activity (connected/disconnected, last readings). Its
-  action buttons (battery-optimization exemption, export logs, copy SSH
-  public key, test alert, git push, pair Bluetooth OBD2 scanners, show
-  paired devices, stop/start scanning, quit) are a single full-width,
-  vertically stacked column, not a grid — label lengths vary enough (a
-  two-line "Copy SSH Public Key" next to a one-line "Quit App") that a
-  multi-column layout doesn't stay aligned, exactly the misalignment the
-  previous row-based layout had in practice.
+  action buttons (battery-optimization exemption, export logs, view app
+  logs, copy SSH public key, test alert, git push, pair Bluetooth OBD2
+  scanners, show paired devices, stop/start scanning, quit) are a single
+  full-width, vertically stacked column, not a grid — label lengths
+  vary enough (a two-line "Copy SSH Public Key" next to a one-line
+  "Quit App") that a multi-column layout doesn't stay aligned, exactly
+  the misalignment the previous row-based layout had in practice.
 
 Go stays the place where all the interesting logic and all the tests live;
 Kotlin is intentionally kept dumb (I/O plumbing + Android ceremony). For example,
@@ -501,6 +501,25 @@ available), and `StatusActivity` logs it once via `Mobile.logDebug` on
 app startup — so a log export can be matched to the exact build that
 produced it (see `docs/defects.md`). Section 5.1 covers the matching
 scan-lifecycle logging in `DeviceScanActivity`.
+
+A **"View App Logs"** button (`LogViewerActivity`) reads `app.log`
+directly for in-app viewing, without needing `adb`, a file manager, or
+the git-backup path (section 7) to be reachable at all — the intended
+use is exactly a moment when one of those isn't available or hasn't
+worked. Kotlin-only, same "framework plumbing, not business logic"
+precedent as `LogExporter` (section 3): `LogViewer.readTail()` is a
+small, directly-unit-testable file-reading helper, separate from the
+`LogViewerActivity` shell that displays it. Rather than loading the
+full file (capped at 10MB, above) into a single `TextView`, it reads
+only the last `TAIL_BYTES` (200KB) via `RandomAccessFile` — seeking
+near the end and discarding a leading partial line so the displayed
+text starts cleanly at a line boundary — with a truncation notice shown
+whenever the file is larger than that. A Refresh action re-reads the
+file, since `app.log` keeps growing live while monitoring runs. This
+complements, rather than replaces, "Export Logs" (section 3): the
+viewer is for a quick glance without leaving the app; export is still
+how the full file (plus the rotated `app.log.1` and reading CSVs)
+actually leaves the device.
 
 ### 6.3 SSH key for log backup
 
