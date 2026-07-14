@@ -46,6 +46,7 @@ class StatusActivity : AppCompatActivity(), ObdForegroundService.StatusListener 
     private lateinit var exportButton: Button
     private lateinit var copySshKeyButton: Button
     private lateinit var testAlertButton: Button
+    private lateinit var gitPushButton: Button
     private lateinit var stopButton: Button
     private lateinit var quitButton: Button
 
@@ -111,6 +112,8 @@ class StatusActivity : AppCompatActivity(), ObdForegroundService.StatusListener 
         copySshKeyButton.setOnClickListener { copySshKeyToClipboard() }
         testAlertButton = findViewById(R.id.testAlertButton)
         testAlertButton.setOnClickListener { showTestAlert() }
+        gitPushButton = findViewById(R.id.gitPushButton)
+        gitPushButton.setOnClickListener { gitPush() }
         stopButton = findViewById(R.id.stopButton)
         stopButton.setOnClickListener { if (stoppedByUser) startScanning() else stopMonitoring() }
         quitButton = findViewById(R.id.quitButton)
@@ -368,6 +371,30 @@ class StatusActivity : AppCompatActivity(), ObdForegroundService.StatusListener 
             "WARNING",
             getString(R.string.test_alert_message)
         )
+    }
+
+    private fun gitPush() {
+        scope.launch(Dispatchers.IO) {
+            try {
+                Mobile.forceSyncLogs(filesDir.absolutePath)
+                runOnUiThread {
+                    Toast.makeText(
+                        this@StatusActivity,
+                        getString(R.string.git_push_success),
+                        Toast.LENGTH_SHORT
+                    ).show()
+                }
+            } catch (e: Exception) {
+                Mobile.logError("Git push failed: $e")
+                runOnUiThread {
+                    Toast.makeText(
+                        this@StatusActivity,
+                        getString(R.string.git_push_failed),
+                        Toast.LENGTH_SHORT
+                    ).show()
+                }
+            }
+        }
     }
 
     companion object {
