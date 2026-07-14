@@ -93,17 +93,13 @@ class ObdForegroundService : Service() {
 
     override fun onCreate() {
         super.onCreate()
-        try {
-            Mobile.initAppLog(filesDir.absolutePath)
-        } catch (e: Throwable) {
-            // Best-effort, and deliberately catching Throwable (not just
-            // Exception): app logging is an optional convenience, and no
-            // failure initializing it — including an Error, e.g. a
-            // corrupt/missing native library — should be able to crash
-            // the whole foreground service and stop monitoring the car
-            // over what is, at worst, a logging feature not working.
-            Log.w(TAG, "Failed to initialize app log", e)
-        }
+        // App log is opened once for the whole process, in
+        // CarMonitorApplication.onCreate() — not here. It used to be
+        // opened here, but that meant it was never opened at all if the
+        // user previously tapped Stop (this service never starts unless
+        // "Start Scanning" is tapped, DESIGN.md section 7), silently
+        // dropping any logging from an Activity used in that state. See
+        // docs/defects.md.
         scope.launch { gitBackupLoop() }
         createNotificationChannel()
         createAnomalyNotificationChannel()
@@ -143,12 +139,10 @@ class ObdForegroundService : Service() {
     override fun onDestroy() {
         scope.cancel()
         closeConnection()
-        try {
-            Mobile.closeAppLog()
-        } catch (e: Throwable) {
-            // See onCreate()'s matching catch (Throwable, not Exception).
-            Log.w(TAG, "Failed to close app log", e)
-        }
+        // App log is intentionally not closed here — it must stay open
+        // for as long as anything in the process might still log to it
+        // (e.g. DeviceScanActivity after tapping Stop), not just while
+        // this service happens to be running. See CarMonitorApplication.
         super.onDestroy()
     }
 

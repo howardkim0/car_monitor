@@ -126,6 +126,26 @@ failure (e.g. disk full) would vanish with no trace. Fix: routed
 through `internal/applog`'s `LogError` instead, alongside adding the
 app/error log itself. See `DESIGN.md` section 6.2.
 
+**Logging from `DeviceScanActivity` (and anything else run before
+monitoring started) was a silent no-op.** Found via background
+investigation into why a reported scan session showed nothing in
+`app.log`. Root cause: `Mobile.initAppLog()` was only ever called from
+`ObdForegroundService.onCreate()` — and `LogDebug`/`LogError` are
+genuine no-ops on the Go side until that's run
+(`TestLogErrorAndLogDebugAreNoOpsBeforeInit`). Critically, that
+`onCreate()` is never reached at all if the user previously tapped
+Stop: resuming is always explicit (`DESIGN.md` section 7), so
+`ObdForegroundService.start()` is simply never called on that launch.
+A user who opened "Pair Bluetooth OBD2 Scanners" in that state got no
+log trail for it whatsoever — not a brief startup race, but the entire
+session. Fix: moved `Mobile.initAppLog()` to a new
+`CarMonitorApplication.onCreate()`, which Android guarantees runs
+before any Activity or Service in the process; stopped explicitly
+closing the log from `ObdForegroundService.onDestroy()` too, since it
+must stay open for as long as anything in the process might still log
+to it, not just while that Service happens to be running. See
+`DESIGN.md` section 6.2.
+
 ## Git backup / SSH
 
 **Every push failed: "cannot create known hosts callback"** (`dc02f6d`,

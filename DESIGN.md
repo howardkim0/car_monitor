@@ -351,14 +351,21 @@ including `mobile.go`'s reading-append path (see `docs/defects.md` for
 the swallowed-error bug this fixed).
 
 Every write here is best-effort by design — a logging failure must
-never crash or block the app. `Mobile.initAppLog`/`closeAppLog` are
-wrapped in `catch (e: Throwable)`, not just `Exception`, in
-`ObdForegroundService.onCreate()`/`onDestroy()`: gomobile's `Mobile`
-class does native-library loading in its static initializer, and a
-failure there surfaces as `UnsatisfiedLinkError`/
-`ExceptionInInitializerError` — `Error` subtypes a plain `Exception`
-catch would miss, crashing the service over what is at worst a logging
-feature not working.
+never crash or block the app. `Mobile.initAppLog` is called once from
+`CarMonitorApplication.onCreate()` — before any Activity or Service
+exists, not from `ObdForegroundService` (see `docs/defects.md` for the
+silent-no-op-logging bug that traces to) — and is never explicitly
+closed: the log must stay open for as long as anything in the process
+might still log to it, not just while the Service happens to be
+running, and `Application.onTerminate()` is unreliable on real devices
+anyway. The call is wrapped in `catch (e: Throwable)`, not just
+`Exception`: gomobile's `Mobile` class does native-library loading in
+its static initializer, and a failure there surfaces as
+`UnsatisfiedLinkError`/`ExceptionInInitializerError` — `Error`
+subtypes a plain `Exception` catch would miss, crashing the whole app
+over what is at worst a logging feature not working. That same catch
+is also what keeps this call safe under Robolectric (`docs/dev-setup.md`),
+which has no native library to load at all.
 
 That same native-library-on-first-touch behavior is why every
 `Mobile.*` call from an Activity is dispatched off the main thread —
