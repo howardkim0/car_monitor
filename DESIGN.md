@@ -459,8 +459,8 @@ never actually renamed away, so it's simply reopened at the same path —
 logging keeps working (just without having rotated that time) rather
 than going dark for the rest of the process over a rotation failure.
 
-Reachable from both sides of the Go/Kotlin split, per this doc's
-"Go owns business logic" split (section 3): `mobile.LogError`/
+Reachable from both sides of the Go/Kotlin split, per section 3's
+Go/Kotlin division of responsibilities: `mobile.LogError`/
 `mobile.LogDebug` are package-level (not tied to any one `Session` —
 a `Session` is recreated on every Bluetooth reconnect, but the app log
 must stay open across that churn) gomobile exports Kotlin calls into
@@ -507,8 +507,8 @@ scan-lifecycle logging in `DeviceScanActivity`.
 On-device ed25519 keypair, generated once and persisted in
 `/data/data/<pkg>/files/ssh/id_ed25519` (private, mode 0o600) and
 `/data/data/<pkg>/files/ssh/id_ed25519.pub` (public, mode 0o644), used
-to authenticate log backups to a remote git repository (see section 12's
-git-backup plan). Idempotent: the public key is cached on first call to
+to authenticate log backups to a remote git repository (see section 7's
+git-backup loop). Idempotent: the public key is cached on first call to
 `mobile.SSHPublicKey()` and reused forever — regenerating would silently
 orphan any deploy key already registered on the upstream repository.
 
@@ -646,7 +646,7 @@ needing `adb`.
   toggle is also required for `startDiscovery()` to return results, the
   same silent-empty-results failure mode as `BLUETOOTH_SCAN` above, but
   with no `neverForLocation`-equivalent exemption available at all on
-  these API levels (`minSdk` is 26, section 10) — `DeviceScanActivity`
+  these API levels (`minSdk` is 26, section 11) — `DeviceScanActivity`
   checks `LocationManager.isLocationEnabled()` before scanning on these
   versions and tells the user directly rather than running a scan
   that's guaranteed to find nothing.
@@ -787,14 +787,15 @@ never into the repo. Without those secrets configured, the build silently
 falls back to whatever ephemeral `debug.keystore` that CI run's fresh VM
 auto-generates, same as before this existed.
 
-The problem this solves: Android refuses to install an APK over an
-existing app unless the signatures match, and a fresh debug.keystore gets
-auto-generated on every CI runner (a new VM each run) — so without a
-persistent key, every `latest` release used to carry a different
-signature, and updating meant uninstalling the old one first. A locally
+This matters because Android refuses to install an APK over an existing
+app unless the signatures match, and a fresh `debug.keystore` gets
+auto-generated on every CI runner (a new VM each run) — without a
+persistent key, every `latest` release would carry a different signature
+and updating would require uninstalling the old one first. A locally
 built `./gradlew assembleDebug` is unaffected either way (still signed
 with that machine's own persistent `~/.android/debug.keystore`); only CI
-builds needed this.
+builds need this. See `docs/defects.md` for the "Android build /
+release" entry this fixed.
 
 One migration note: a phone that already has a build installed from
 *before* the CI secrets were configured needs one manual uninstall — after

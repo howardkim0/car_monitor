@@ -3,7 +3,7 @@
 A log of real bugs found in this app: symptom reported, root cause, and
 fix. Grouped by subsystem (not chronologically) so a new report can be
 checked against past patterns in the same area — see `CLAUDE.md`'s
-"Check past defects before investigating a new one."
+"Check docs/defects.md before investigating a new defect."
 
 This is a history doc, not a description of current behavior — for how a
 system works *today*, read `DESIGN.md` (each entry below links back to
@@ -118,6 +118,14 @@ the new calls the same way. See `DESIGN.md` section 6.2 for the
 resulting rule ("every `Mobile.*` call from an Activity is dispatched
 off the main thread").
 
+## Storage / app log
+
+**`mobile.go`'s reading-append path silently swallowed a failed
+`store.Append`** (`f9d1930`, `_ = s.store.Append(r)`) — a storage
+failure (e.g. disk full) would vanish with no trace. Fix: routed
+through `internal/applog`'s `LogError` instead, alongside adding the
+app/error log itself. See `DESIGN.md` section 6.2.
+
 ## Git backup / SSH
 
 **Every push failed: "cannot create known hosts callback"** (`dc02f6d`,
@@ -153,12 +161,6 @@ symptom — confirmed by bracketing both against the GitHub Actions
 build-completion timestamps for each fix). No code change was needed
 here beyond the diagnosability fix described in the Bluetooth Round 3
 entry above.
-
-**`mobile.go`'s reading-append path silently swallowed a failed
-`store.Append`** (`f9d1930`, `_ = s.store.Append(r)`) — a storage
-failure (e.g. disk full) would vanish with no trace. Fix: routed
-through `internal/applog`'s `LogError` instead, alongside adding the
-app/error log itself. See `DESIGN.md` section 6.2.
 
 ## Foreground service lifecycle ("Stop" unreliable)
 
