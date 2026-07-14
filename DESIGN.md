@@ -260,6 +260,31 @@ is Android framework ceremony, not business logic):
   doesn't seem to do anything" report; section 8's `neverForLocation` fix
   is the most likely primary cause, though not independently confirmed
   against that specific device's Location Services state.
+
+  A follow-up report ("the toggle works now, but no discoverable devices
+  ever show up") arrived with no new evidence in `car_monitor_logs`
+  (section 12's git-backup sync hadn't fired since the prior report —
+  a short test session between the automatic 5-minute checks leaves
+  nothing to diff). Re-review found a genuine second gap in the
+  `neverForLocation` fix (section 8): that flag only exempts API 31+
+  from needing system Location Services on for discovery to return
+  results — this app's `minSdk` is 26, and on API 26-30 classic
+  discovery still silently needs Location Services on regardless of
+  the flag (`startDiscovery()` still returns `true`, still fires
+  `ACTION_DISCOVERY_FINISHED` on schedule, just with zero
+  `ACTION_FOUND` broadcasts in between). `DeviceScanActivity` now
+  checks `LocationManager.isLocationEnabled()` before starting a scan
+  on API < 31, and shows a direct status message telling the user to
+  enable it instead of running a scan that's silently guaranteed to
+  find nothing. Alongside that, the status text also now reports live
+  scan state instead of staying static instructional text —
+  "Scanning… (N found)" as each `ACTION_FOUND` arrives, and a final
+  "Scan finished — N found" (explicitly saying zero, rather than
+  looking indistinguishable from "still scanning" or "stuck") on
+  `ACTION_DISCOVERY_FINISHED` — both so a genuinely-empty result (most
+  nearby devices, unlike most ELM327 dongles, aren't discoverable by
+  default) is distinguishable from something being stuck, and so any
+  *next* report is self-diagnosing without a git-log round trip.
 - **"Show Paired Devices"** is a lighter-weight `AlertDialog` on the
   status screen (no new Activity — it only needs `getBondedDevices()`,
   not the ongoing discovery lifecycle a full scan needs) listing every
@@ -643,9 +668,16 @@ needing `adb`.
   not observable from app logs) — section 5.1 also covers two smaller,
   independently-real contributors found in the same investigation
   (an unchecked `startDiscovery()` return value, and permission
-  failures that were silent in the UI).
+  failures that were silent in the UI). This flag is API 31+ only.
 - `ACCESS_FINE_LOCATION` (still required by some OEMs for classic
-  Bluetooth on API < 31)
+  Bluetooth on API < 31) — on API 26-30, the *system* Location Services
+  toggle is also required for `startDiscovery()` to return results, the
+  same silent-empty-results failure mode as `BLUETOOTH_SCAN` above, but
+  with no `neverForLocation`-equivalent exemption available at all on
+  these API levels (`minSdk` is 26, section 10) — `DeviceScanActivity`
+  checks `LocationManager.isLocationEnabled()` before scanning on these
+  versions and tells the user directly rather than running a scan
+  that's guaranteed to find nothing.
 - `FOREGROUND_SERVICE` and `FOREGROUND_SERVICE_CONNECTED_DEVICE` (API 34+)
 - `POST_NOTIFICATIONS` (Android 13+, runtime-requested)
 - `RECEIVE_BOOT_COMPLETED` (optional, only if auto-start on boot is enabled)
