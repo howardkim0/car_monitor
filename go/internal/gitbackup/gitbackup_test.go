@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -734,6 +735,13 @@ func TestAuthMethodFromKeyValidKey(t *testing.T) {
 	if publicKeys.HostKeyCallback == nil {
 		t.Error("authMethodFromKey must set HostKeyCallback — a nil callback falls back to " +
 			"go-git's known_hosts-file lookup, which can never succeed in this app's sandbox")
+	}
+	wantAlgorithms := []string{"ssh-ed25519"}
+	if !slices.Equal(publicKeys.HostKeyAlgorithms, wantAlgorithms) {
+		t.Errorf("authMethodFromKey HostKeyAlgorithms = %v, want %v — without this, host key "+
+			"negotiation isn't guaranteed to pick the ed25519 key FixedHostKey is pinned to, "+
+			"and a real GitHub connection fails with \"host key mismatch\" (DESIGN.md section 7)",
+			publicKeys.HostKeyAlgorithms, wantAlgorithms)
 	}
 }
 

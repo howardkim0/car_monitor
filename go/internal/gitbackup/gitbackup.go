@@ -395,6 +395,16 @@ func authMethodFromKey(keyPath string) (ssh.AuthMethod, error) {
 		return nil, err
 	}
 	auth.HostKeyCallback = hostKeyCallback
+	// Pinning the callback alone isn't enough: GitHub supports RSA, ECDSA,
+	// and ed25519 host keys, and golang.org/x/crypto/ssh's default
+	// HostKeyAlgorithms list doesn't guarantee ed25519 gets negotiated —
+	// without this, the server can present a different (valid, but
+	// non-ed25519) key, which FixedHostKey then correctly rejects as a
+	// "mismatch" even though nothing is actually wrong. Verified against
+	// the real github.com:22 (DESIGN.md section 7): unset, this reproduces
+	// exactly that mismatch; set, the handshake gets past host-key
+	// verification.
+	auth.HostKeyAlgorithms = []string{cryptossh.KeyAlgoED25519}
 
 	return auth, nil
 }
