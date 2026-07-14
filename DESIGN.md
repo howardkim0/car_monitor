@@ -519,8 +519,25 @@ needing `adb`.
   wrapping a new `Syncer.SyncNow` that shares `SyncIfNeeded`'s
   clone/copy/commit/push logic but skips its gate check) triggers an
   immediate, ungated push — for a driver who wants to confirm backup is
-  working right
-  now rather than wait for the next automatic check.
+  working right now rather than wait for the next automatic check.
+  SSH host-key verification is **pinned to GitHub's own published ed25519
+  host key**, not left to go-git's default: `ssh.NewPublicKeys`'
+  `HostKeyCallback` is nil unless set explicitly, which makes go-git fall
+  back to reading `~/.ssh/known_hosts` — a lookup that can never succeed
+  in this app's sandbox (no `$HOME`, no such file, no `SSH_KNOWN_HOSTS`
+  env var), so *every* push, automatic or manual, failed at the SSH
+  handshake with "cannot create known hosts callback," regardless of
+  network connectivity or anything else about the attempt. The pinned
+  key (fetched from `https://api.github.com/meta`, GitHub's own
+  authoritative source, not transcribed from a docs page) is checked via
+  `ssh.FixedHostKey`, which both fixes this outright and is the more
+  secure choice anyway, given the remote is always the same hardcoded
+  GitHub host — no reason to accept whatever key an on-path attacker
+  might present, which `InsecureIgnoreHostKey()` would have done. If
+  GitHub ever rotates this key (it has, publicly, before), this fails
+  closed — pushes start erroring again, the same visible symptom as
+  today — rather than silently falling back to accepting an unverified
+  key, which would be the worse failure mode.
 
 ## 8. Permissions
 
