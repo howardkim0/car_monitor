@@ -172,6 +172,13 @@ class ObdForegroundServiceTest {
         val wantBytes = "ATE0\r".toByteArray(Charsets.US_ASCII)
         assertEquals("writeCommand should write command with carriage return",
             wantBytes.contentToString(), slot.captured.contentToString())
+
+        // Every command write is flushed immediately — writeLoop's init
+        // sequence and main polling loop both rely on writeCommand for
+        // this rather than flushing separately at each call site (a prior
+        // version of this fix only flushed in the main loop, silently
+        // leaving the init sequence unflushed).
+        io.mockk.verify(exactly = 1) { mockOutputStream.flush() }
     }
 
     // ACTION_QUIT is deliberately NOT exercised through onStartCommand()

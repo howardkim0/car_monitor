@@ -417,6 +417,7 @@ class ObdForegroundService : Service() {
     @VisibleForTesting
     internal fun writeCommand(output: java.io.OutputStream, command: String) {
         output.write((command + "\r").toByteArray(Charsets.US_ASCII))
+        output.flush()
     }
 
     private suspend fun writeLoop(socket: BluetoothSocket, session: Session) {
@@ -444,7 +445,6 @@ class ObdForegroundService : Service() {
                 val command = session.commandAt(i)
                 if (command.isEmpty()) continue
                 writeCommand(output, command)
-                output.flush()
                 delay(COMMAND_INTERVAL_MS)
             }
             delay(POLL_CYCLE_MS)
