@@ -2,73 +2,66 @@
 
 ## 1. Summary
 
-Car Monitor is an Android app whose job is to sit in the background, maintain
-a Bluetooth connection to a car's OBD2 scanner (ELM327-compatible dongle),
-continuously pull vehicle data (RPM, speed, coolant temp, DTCs, etc.), and
-log/process it locally. There is no meaningful foreground UI beyond a status
-screen and Android's required "this app is running" notification.
+Car Monitor is an Android app that maintains a Bluetooth connection to a
+car's OBD2 scanner (ELM327-compatible dongle), continuously pulls vehicle
+data (RPM, speed, coolant temp, DTCs, etc.), and logs it locally. No
+meaningful foreground UI beyond a status screen and Android's required
+"this app is running" notification.
 
-Core business logic (OBD2 protocol handling, data parsing, storage, device
-and vehicle configuration) is written in **Go**. Android requires a JVM
-entry point and owns Bluetooth I/O and process-lifecycle APIs, so a thin
-Kotlin shell hosts a Foreground Service and hands raw bytes to Go.
+Core business logic (OBD2 protocol handling, parsing, storage, device and
+vehicle configuration) is written in **Go**. Android requires a JVM entry
+point and owns Bluetooth I/O and process-lifecycle APIs, so a thin Kotlin
+shell hosts a Foreground Service and hands raw bytes to Go.
 
 For v1:
-- Bluetooth device defaults to one known MAC address (a classic SPP
-  ELM327 dongle) unless the user pairs/selects a different one in-app
-  (section 5.1) — no rebuild needed either way.
-- Vehicle profile is hardcoded to a 2023 Subaru Forester (PIDs it supports,
-  units, any make-specific quirks), with no in-app override yet.
+- Bluetooth device defaults to one hardcoded MAC (a classic SPP ELM327
+  dongle) unless the user pairs/selects another in-app (section 5.1) — no
+  rebuild needed either way.
+- Vehicle profile is hardcoded to a 2023 Subaru Forester, with no in-app
+  override yet.
 
-Both are implemented behind small interfaces so additional devices and
-vehicles can be added later without restructuring the app.
+Both sit behind small interfaces so more devices/vehicles can be added
+without restructuring the app.
 
 ## 2. Goals / Non-Goals
 
 **Goals**
-- Reliable background capture of OBD2 data with the phone screen off.
-- Reconnect automatically if the Bluetooth link drops (dongle out of range,
-  car turned off, phone Bluetooth toggled).
-- Store readings locally in a simple, inspectable format.
-- Keep the door open for more dongles / more cars without a rewrite.
-- Let the user pick or pair which Bluetooth dongle to use, without a rebuild.
+- Reliable background OBD2 capture with the screen off.
+- Automatic reconnect on Bluetooth drop.
+- Simple, inspectable local storage.
+- Extensible to more dongles/cars without a rewrite.
+- In-app Bluetooth device pairing/selection, no rebuild.
 
 **Non-goals (v1)**
-- No cloud sync, no remote telemetry, no multi-device fleet management.
-- No support for non-ELM327 protocols (e.g. proprietary CAN dongles).
+- No cloud sync, remote telemetry, or multi-device fleet management.
+- No non-ELM327 protocols (e.g. proprietary CAN dongles).
 - No iOS.
 
 ## 3. Why not "pure Go" on Android
 
-Go cannot ship as a standalone Android app — APKs need a JVM entry point,
-and Android's Bluetooth Classic (`BluetoothSocket`/RFCOMM, which is what
-most ELM327 OBD2 dongles use) and Foreground Service lifecycle APIs are
-Java/Kotlin-only. `tinygo-org/bluetooth` and similar pure-Go BLE stacks
-don't target Android.
+Go can't ship as a standalone Android app — APKs need a JVM entry point,
+and Bluetooth Classic (`BluetoothSocket`/RFCOMM, what most ELM327 dongles
+use) and Foreground Service APIs are Java/Kotlin-only. Pure-Go BLE stacks
+like `tinygo-org/bluetooth` don't target Android.
 
-The practical split, and what this doc assumes:
+The split:
+- **Go module** (`go/`): all business logic — ELM327/OBD2 protocol
+  framing, PID decoding, device/vehicle registries, storage. Compiled to
+  an Android `.aar` via `gomobile bind`.
+- **Kotlin shell** (`android/`): the smallest glue possible — a
+  `Foreground Service` that opens the Bluetooth socket and streams bytes
+  to/from Go, plus permissions, the persistent notification, boot-start,
+  and one status Activity. Its action buttons (battery-optimization
+  exemption, export logs, view app logs, copy SSH public key, test
+  alert, git push, pair/show Bluetooth devices, stop/start scanning,
+  quit) are a single vertically-stacked column, not a grid — label
+  lengths vary too much (a two-line "Copy SSH Public Key" next to a
+  one-line "Quit App") to stay aligned in columns.
 
-- **Go module** (`go/`): all business logic — ELM327/OBD2 protocol framing,
-  PID decoding, device registry, vehicle registry, storage. Compiled to an
-  Android `.aar` via `gomobile bind`.
-- **Kotlin shell** (`android/`): the smallest amount of Android glue
-  possible — a `Foreground Service` that opens the classic Bluetooth socket,
-  streams raw bytes into the Go library, and reads processed results back
-  out. Also owns permissions, the persistent notification, boot-start, and
-  a single status Activity (connected/disconnected, last readings). Its
-  action buttons (battery-optimization exemption, export logs, view app
-  logs, copy SSH public key, test alert, git push, pair Bluetooth OBD2
-  scanners, show paired devices, stop/start scanning, quit) are a single
-  full-width, vertically stacked column, not a grid — label lengths
-  vary enough (a two-line "Copy SSH Public Key" next to a one-line
-  "Quit App") that a multi-column layout doesn't stay aligned, exactly
-  the misalignment the previous row-based layout had in practice.
-
-Go stays the place where all the interesting logic and all the tests live;
-Kotlin is intentionally kept dumb (I/O plumbing + Android ceremony). For example,
-`LogExporter` (manual log export via the share sheet) is deliberately Kotlin-only
-because zipping and Android intent-based sharing are framework plumbing, not
-business logic requiring a Go round-trip.
+Go owns all interesting logic and tests; Kotlin is deliberately dumb I/O
+plumbing plus Android ceremony. Framework-only concerns — zipping logs
+for the share sheet (`LogExporter`), Bluetooth discovery UI — stay
+Kotlin-only rather than round-tripping through Go.
 
 ## 4. Architecture
 
@@ -122,86 +115,50 @@ business logic requiring a Go round-trip.
 1. `ObdForegroundService` opens an RFCOMM socket to `Mobile.deviceMAC()`
    (the selected device, section 5.1, or the hardcoded fallback) using
    the standard SPP UUID (`00001101-0000-1000-8000-00805F9B34FB`).
-2. Raw bytes read from the socket are pushed into the Go layer
-   (`Session.Feed(data []byte)` in the gomobile binding).
-3. Go's `internal/obd2` package frames ELM327 responses, matches them to
-   outstanding PID requests, and decodes them into typed readings
-   (`Reading{PID, Name, Value, Unit, Timestamp}`) using the active
-   `vehicle.Profile`.
-4. Decoded readings are appended to local storage (`internal/storage`, CSV,
-   see section 6) and also handed back to Kotlin (via a callback interface)
-   for the status screen to display. A failed append is not silently
-   dropped — it goes to `internal/applog` (section 6) instead. A decode
-   failure (a malformed or truncated response line) is not logged; it's
-   treated as expected noise on a real ELM327 link and simply skipped.
-5. `internal/obd2` decides *which* PIDs to request, based on the active
-   `vehicle.Profile`'s PID list and a discovery step (section 5.2) — Kotlin
-   never needs to know what a PID is. *How often* to poll is, for v1, a
-   plain constant in `ObdForegroundService` (`Session`/`Commands()` carries
-   no timing info); see section 12 for moving that into Go too.
-
-   Before any of that, `writeLoop` first sends a fixed ELM327 setup
-   sequence once per connection — `obd2.InitCommands()` (`ATE0`, `ATL0`,
-   `ATS1`, `ATH0`, `ATSP0`), exposed to Kotlin as `Mobile.initCommandCount()`/
-   `initCommandAt(i)`, the same two-call pattern as `Commands()`/
-   `CommandAt(i)`. This exists because ELM327 settings (echo, linefeeds,
-   spacing, headers, protocol) are RAM-resident on the adapter and persist
-   across Bluetooth (dis)connects — connecting doesn't reset them. A prior
-   session, this app's or a different OBD2 app's (`ATH1`/headers-on is
-   common: many apps turn headers on deliberately, to distinguish
-   multi-ECU responses), can leave the adapter in a state
-   `parseResponseBytes` can't read: it requires space-separated
-   single-byte hex fields (`ATS1`, not the no-spaces `ATS0`) with no
-   leading header/CAN-ID field (`ATH0`) — a response like `7E8 04 41 0C 1A
-   F8` (headers on) fails outright, because `7E8` doesn't fit in a byte.
-   That failure is indistinguishable from ordinary ELM327 noise (skipped
-   silently, same as an echoed command or the `>` prompt) — see
-   `docs/defects.md` for the zero-readings incident this traces to.
-   Deliberately no `ATZ` (full reset): that would
-   fix the same problem but costs a real reset (~1-2s on some clones) on
-   every reconnect, including the frequent, transient ones the backoff
-   loop in section 7 already retries — the five explicit `AT` setting
-   commands above force the exact state the parser needs without paying
-   that cost.
-6. Separately from that live per-reading path, `ObdForegroundService` also
-   runs a periodic coroutine loop (`anomalyCheckLoop`, alongside the read/
-   write loops — `ANOMALY_CHECK_INTERVAL_MS`, currently 60s, the same
-   "Kotlin decides how often" precedent as step 5) that calls
-   `Session.CheckAnomalies()`. That re-reads today's CSV log
-   (`storage.LoadReadings`), hands it to `internal/monitor` to group into
-   per-metric time series (pairing same-cycle PIDs like the two fuel trims,
-   or the two O2 sensor voltages, by nearest timestamp — raw readings
-   arrive as separate rows, not matched pairs), and runs every applicable
-   `internal/trend` check. Only a metric whose severity level has *changed*
-   since the last check is reported back to Kotlin, via a second callback
-   interface (`AnomalyListener`) — so a persisting Warning stays silent
-   instead of re-notifying every 60s, but an escalation, a de-escalation,
-   or a recurrence after recovering to Normal each fire again. Kotlin turns
-   that into a heads-up notification on a separate, higher-importance
-   channel from the ongoing connection-status one.
-
-   Notification building (channel creation, title/message/priority,
-   `setAutoCancel(true)` so a tap dismisses it — an anomaly notification is
-   never `setOngoing`, so a swipe always dismisses it too) lives in a
-   standalone `AnomalyNotifications` object
-   (`android/.../AnomalyNotifications.kt`), not inline in
-   `ObdForegroundService`, so `StatusActivity`'s "Test Alert" button (posts
-   a sample WARNING-level notification under the metric name "Test Alert,"
-   so it's unambiguous it isn't a real reading) can reuse the exact same
-   code path without `ObdForegroundService` needing to be running. That
-   decoupling matters: routing the test button through the Service instead
-   (e.g. an `ACTION_TEST_ALERT` intent like `ACTION_STOP`/`ACTION_QUIT`)
-   would call `startService`/`startForegroundService`, which — if the user
-   had already tapped Stop — would silently resume the whole foreground
-   service and its connection loop, violating section 7's "resuming after
-   a stop is always explicit" rule. `StatusActivity` posts directly and
-   ensures the notification channel exists itself first (idempotent —
-   `NotificationManager.createNotificationChannel` is documented as a
-   no-op when the channel already exists unchanged), sidestepping the
-   Service's lifecycle entirely. `ObdForegroundService`'s `anomalyListener`
-   and `onCreate()` are updated to call `AnomalyNotifications.post`/
-   `.ensureChannel` too, so there is one implementation of notification
-   building, not two that can drift apart.
+2. Raw bytes read from the socket are pushed into Go via
+   `Session.Feed(data []byte)`.
+3. `internal/obd2` frames ELM327 responses, matches them to outstanding
+   PID requests, and decodes typed readings (`Reading{PID, Name, Value,
+   Unit, Timestamp}`) using the active `vehicle.Profile`.
+4. Decoded readings are appended to storage (section 6.1) and handed
+   back to Kotlin for display. A failed append goes to `internal/applog`
+   (section 6.2) instead of being dropped silently; a decode failure
+   (malformed/truncated response line) is expected noise on a real
+   ELM327 link and is skipped without logging.
+5. `internal/obd2` decides *which* PIDs to request (profile + discovery,
+   section 5.2); Kotlin still decides polling cadence via a plain
+   constant (section 12). Before requesting any PID, `writeLoop` sends a
+   fixed ELM327 setup sequence once per connection —
+   `obd2.InitCommands()` (`ATE0 ATL0 ATS1 ATH0 ATSP0`), exposed to
+   Kotlin the same two-call way as `Commands()`/`CommandAt(i)`. Adapter
+   settings (echo, headers, spacing, protocol) are RAM-resident and
+   persist across Bluetooth (dis)connects, so a prior session — this
+   app's or another OBD2 app's — can leave the adapter in a state
+   `parseResponseBytes` can't read (it requires space-separated
+   single-byte hex fields with no header/CAN-ID prefix). See
+   `docs/defects.md` for the zero-readings incident this fixes.
+   Deliberately no `ATZ` full reset instead: that costs a real ~1-2s
+   reset on some clones every reconnect, including the frequent
+   transient ones the backoff loop (section 7) already retries.
+6. Independently, a periodic `anomalyCheckLoop` (`ANOMALY_CHECK_INTERVAL_MS`,
+   60s) calls `Session.CheckAnomalies()`, which re-reads today's CSV
+   (`storage.LoadReadings`), groups it into per-metric time series via
+   `internal/monitor` (pairing same-cycle PIDs like the two fuel trims by
+   nearest timestamp), and runs every applicable `internal/trend` check.
+   Only a metric whose severity *changed* since the last check is
+   reported back (via `AnomalyListener`), so a persisting Warning stays
+   silent but an escalation, de-escalation, or recurrence each notify.
+   Kotlin posts these as a heads-up notification on a separate,
+   higher-importance channel from the ongoing connection-status one
+   (`setAutoCancel(true)`, never `setOngoing`, so a swipe always
+   dismisses it). Notification building lives in a standalone
+   `AnomalyNotifications` object — used by both `ObdForegroundService`'s
+   listener and `StatusActivity`'s "Test Alert" button, so there's one
+   implementation, not two that can drift apart — which lets "Test
+   Alert" post a sample notification without the Service running at
+   all. That matters: routing it through the Service instead risks
+   silently resuming a stopped connection (section 7's "resuming after a
+   stop is always explicit" rule).
 
 ## 5. Extensibility
 
@@ -222,70 +179,47 @@ var known = []Profile{
 func Default() Profile { return known[0] }
 ```
 
-`known`/`Default()` remain the factory fallback for a fresh install, but
-the device actually connected to is `SelectedOrDefault(dir)`: a persisted
-user choice (`SaveSelected`/`LoadSelected`, a small `mac\nname\n` text
-file under the app's storage root — same plain-text-over-JSON philosophy
-as `internal/applog`, section 6.2) takes priority over `Default()` once
-one exists. `mobile.DeviceMAC(storageDir)` and
-`mobile.SetSelectedDevice(storageDir, mac, name)` are the JNI-facing
-wrappers Kotlin calls — `internal/obd2` and the connection code never see
-a literal MAC either way, only ever `device.Profile`, so this selection
-layer sits on top of the existing extensibility point rather than adding
-a new one.
+`known`/`Default()` are the factory fallback for a fresh install; the
+device actually connected to is `SelectedOrDefault(dir)` — a persisted
+user choice (`SaveSelected`/`LoadSelected`, a plain-text `mac\nname\n`
+file, same philosophy as `internal/applog`, section 6.2) that takes
+priority once one exists. `mobile.DeviceMAC(storageDir)` and
+`mobile.SetSelectedDevice(storageDir, mac, name)` are the JNI wrappers —
+`internal/obd2` never sees a literal MAC, only ever `device.Profile`.
 
-Two entry points on the status screen write a selection, both Kotlin-only
-(matching `LogExporter`'s precedent, section 3 — device discovery/pairing
-is Android framework ceremony, not business logic):
-- **"Pair Bluetooth OBD2 Scanners"** (`DeviceScanActivity`, a dedicated
-  screen — this is a genuinely stateful flow, not a quick dialog) lists
+Two Kotlin-only entry points on the status screen write a selection
+(matching `LogExporter`'s precedent, section 3 — pairing UI is framework
+ceremony, not business logic):
+- **"Pair Bluetooth OBD2 Scanners"** (`DeviceScanActivity`) lists
   already-bonded devices for one-tap selection, and separately runs
-  `BluetoothAdapter.startDiscovery()` for nearby *unpaired* ones —
-  tapping one calls `BluetoothDevice.createBond()` (Android's own system
-  pairing dialog handles the PIN exchange; this app never implements
-  pairing itself) and selects it once bonding completes. The scan button
-  is a toggle, not a one-shot trigger: tapping it again while a scan is
-  running calls `BluetoothAdapter.cancelDiscovery()` immediately, rather
-  than only waiting out Android's own ~12s discovery timeout; its label
-  reflects which state it's in, and `startDiscovery()`'s boolean return
-  value is checked (it can return `false` — adapter disabled, discovery
-  already running — without throwing). A `SecurityException` from a
-  denied permission (starting a scan, listing bonded devices, reading a
-  device's name) surfaces as a visible status message, not just a log
-  line. Before starting a scan, `isLocationEnabled()` checks the system
-  Location Services toggle directly on API < 31 (no
-  `neverForLocation`-equivalent exemption exists below API 31, section 8)
-  and shows a direct message if it's off, rather than running a scan
-  that's silently guaranteed to find nothing. Status text reports live
-  scan state — "Scanning… (N found)" as each device is found, "Scan
-  finished — N found" when discovery ends — so a genuinely-empty result
-  (most nearby devices, unlike most ELM327 dongles, aren't discoverable
-  by default) reads as confirmed zero, not "stuck." Every step of this
-  flow (the location check result, `startDiscovery()`'s return value,
-  each `ACTION_FOUND`/`ACTION_DISCOVERY_FINISHED`) is logged via
-  `Mobile.logDebug` (section 6.2). See `docs/defects.md` for the
-  three-round investigation this design traces to.
-- **"Show Paired Devices"** is a lighter-weight `AlertDialog` on the
-  status screen (no new Activity — it only needs `getBondedDevices()`,
-  not the ongoing discovery lifecycle a full scan needs) listing every
-  device the phone has ever paired with (not just ones this app
-  discovered), each with a status: `Connected`, `Selected` (the next
-  connection attempt will use it, but it isn't connected right now), or
-  plain `Paired`. Lets a driver switch between two dongles the phone
-  already knows about without re-scanning.
+  `BluetoothAdapter.startDiscovery()` for nearby unpaired ones — tapping
+  one calls `BluetoothDevice.createBond()` (Android's own pairing
+  dialog; this app never implements pairing itself) and selects it once
+  bonding completes. The scan button toggles: a second tap calls
+  `cancelDiscovery()` immediately rather than waiting out Android's own
+  ~12s timeout. `startDiscovery()`'s boolean return is checked — it can
+  return `false` (adapter disabled, discovery already running) without
+  throwing — and a `SecurityException` from a denied permission (scan,
+  list bonded devices, read a device's name) surfaces as a visible
+  status message, not just a log line. Before scanning, `isLocationEnabled()` checks system
+  Location Services directly on API < 31 (no `neverForLocation`
+  exemption exists below API 31, section 8) and shows a message if it's
+  off, rather than running a scan guaranteed to find nothing. Status
+  text reports live progress — "Scanning… (N found)" / "Scan finished —
+  N found" — so an empty result reads as confirmed zero, not "stuck."
+  Every step is logged via `Mobile.logDebug` (section 6.2). See
+  `docs/defects.md` for the three-round investigation behind this
+  design.
+- **"Show Paired Devices"** — a lightweight `AlertDialog` (no new
+  Activity) listing every device the phone has ever paired with, each
+  with a status: `Connected`, `Selected` (next attempt will use it), or
+  plain `Paired`.
 
-Both flows call `ObdForegroundService.reconnectNow()` (via `boundService`,
-if currently bound) after a selection change. That method just closes
-the current socket/session — it doesn't add a new "restart" code path;
-`connectionLoop`'s existing retry logic picks up the new `DeviceMAC()` on
-its very next attempt. Same caveat as `stopServiceImmediately()` (section
-7): if a `connect()` call to the *old* device is already blocked
-mid-flight, closing a socket that hasn't been assigned to the instance
-field yet can't interrupt it — the switch takes effect on the attempt
-after that one finishes or fails. If the service isn't running (stopped),
-`reconnectNow()` is a no-op — the new selection just becomes what's used
-whenever the user next taps Start Scanning, consistent with "resuming
-after a stop is always explicit."
+Both call `ObdForegroundService.reconnectNow()` after a selection
+change — closes the current socket/session so `connectionLoop`'s
+existing retry logic picks up the new `DeviceMAC()` on its next attempt;
+a no-op if the service isn't running (the new selection just applies
+whenever "Start Scanning" is next tapped).
 
 ### 5.2 Vehicles
 
@@ -319,381 +253,270 @@ var subaruForester2023 = Profile{
 func Default() Profile { return subaruForester2023 }
 ```
 
-**Targets the NA FB25 2.5L Forester specifically, not the turbo FA24.**
-That distinction doesn't change *which* PIDs apply — SAE J1979 has no
-dedicated "boost" PID; boost is inferred from Intake Manifold Absolute
-Pressure (0x0B) exceeding Barometric Pressure (0x33), both included and
-valid for either engine — only how Intake Manifold Pressure *behaves* (on
-this NA engine it never exceeds ambient).
+Targets the NA FB25 2.5L Forester specifically, not the turbo FA24 — SAE
+J1979 has no dedicated "boost" PID either way (boost is inferred from
+Intake Manifold Pressure vs. Barometric Pressure, both included), only
+how that pressure *behaves* differs by engine.
 
-**PID scope is a curated practical subset (32 PIDs today), not the full
-SAE J1979 Mode 01 table (80+ PIDs across spec revisions).** The
-discovery mechanism below means a PID listed here that this particular
-ECU doesn't support is simply never requested — there's no runtime cost
-to the list being broader than any one car needs, only the
-implementation/test cost of adding an entry, which is what actually
-bounds the list's size. Excluded and why: bit-encoded/enum PIDs (mode
-status bytes, OBD standards, fuel type) don't fit the single-`float64`
-`Decode` model and aren't "data" the way a temperature/pressure/speed
-reading is; wideband/lambda O2 variants are redundant with the simpler
-voltage-only O2 PIDs included; ethanol % is irrelevant to a
-non-flex-fuel Forester. PIDs 0x14/0x15/0x16/0x17 (O2 sensor banks 1 and
-2 — the boxer engine's genuine two banks, one per cylinder pair) each
-return *two* values (sensor voltage, then short-term trim), but `Decode`
-only supports one `float64` — only the voltage is decoded, since the
-trim sub-field is redundant with the bank-level trim already captured
-via PIDs 0x06-0x09.
+**32 curated PIDs, not the full 80+ SAE J1979 Mode 01 table.** The
+discovery mechanism below means an unsupported listed PID is simply
+never requested, so there's no runtime cost to a broader list — only
+implementation/test cost, which is what actually bounds it. Excluded:
+bit-encoded/enum PIDs (don't fit the single-`float64` `Decode` model),
+wideband O2 (redundant with the voltage-only PIDs included), ethanol%
+(irrelevant to a non-flex-fuel Forester). The dual-bank O2 PIDs
+(0x14-0x17) each return two values but `Decode` only supports one —
+only voltage is decoded, since the trim sub-field duplicates the
+bank-level trim already captured elsewhere.
 
-**PID discovery, not static over-requesting.** `internal/obd2.Session`
-doesn't request every PID in the profile from cycle one — with 32
-PIDs (vs. the original 4), that would balloon a poll cycle to seconds
-for PIDs that may not even be supported. Instead, `Commands()` initially
-returns SAE "PIDs supported" bitmask queries (Mode 01 PIDs
-`0x00`/`0x20`/`0x40`, derived from the profile's actual max PID code, not
-hardcoded) and only switches to the real per-PID request list once the
-ECU's bitmask responses resolve which profile PIDs it actually supports
-— or after a 5-second timeout, which falls back to requesting
-everything (matching the old always-request-everything behavior as a
-safe default, rather than silently going dark, if discovery itself fails
-for some reason). Kotlin's `writeLoop()` needs no changes for this — it
-already just polls `Commands()` blindly every cycle; Go owns the entire
-phase transition. Discovery only covers Mode 01 ("show current data") —
-`discoveryCommands` hardcodes `vehicle.ModeCurrentData` — since that's
-the only mode this app requests (section 12); a future mode (e.g. Mode 09
-vehicle info) would need its own discovery/support-bitmask handling, not
-an extension of this one.
+**PID discovery, not static over-requesting.** `Commands()` starts by
+returning SAE "PIDs supported" bitmask queries (derived from the
+profile's max PID code) rather than all 32 PIDs from cycle one, and
+switches to the real per-PID list once the ECU's bitmask resolves which
+are supported — or after a 5s timeout, falling back to requesting
+everything. Go owns the entire phase transition; Kotlin's `writeLoop()`
+just keeps polling `Commands()` blindly. Only covers Mode 01 (the only
+mode this app requests, section 12) — a future mode would need its own
+discovery handling.
 
-Same extensibility pattern as devices otherwise: one hardcoded
-`Default()` today, but the rest of the app only talks to
-`vehicle.Profile`. A second car means adding another `Profile` value and
-a selection mechanism — no changes to `obd2` or Kotlin. Longer-term this
-could move to a JSON/YAML file bundled as an Android asset instead of a Go
-literal, so profiles can be edited without a
-rebuild; not needed for v1.
+Same extensibility pattern as devices: one hardcoded `Default()` today,
+but the rest of the app only talks to `vehicle.Profile`. A second car is
+an additive `Profile` value plus a selection mechanism — no changes to
+`obd2` or Kotlin. Could move to a bundled JSON/YAML asset later so
+profiles are editable without a rebuild; not needed for v1.
 
 ### 5.3 Selecting device/vehicle without a rebuild
 
-`device.Default()` is now overridable at runtime, no rebuild needed — see
-5.1's persisted-selection mechanism and its two status-screen entry
-points. `vehicle.Default()` is still a simple hardcoded function with no
-config file or UI (section 12); the interface exists so swapping it out
-later (env var, JSON asset, extending the device-picker UI to also cover
-vehicle profile) is a localized change, the same way device selection
-was before this.
+`device.Default()` is runtime-overridable via 5.1's persisted-selection
+mechanism. `vehicle.Default()` is still a hardcoded function with no
+config file or UI (section 12) — the interface exists so swapping it out
+later (env var, JSON asset, extending the device-picker UI) is a
+localized change.
 
 ## 6. Storage
 
 ### 6.1 Reading log
 
 `internal/storage.FileStore` appends one CSV row per `Reading`
-(`pid,name,value,unit,timestamp` — a header row once per file) to
+(`pid,name,value,unit,timestamp`) to
 `/data/data/<pkg>/files/readings/readings-YYYY-MM-DD.csv`, one file per
-**UTC** calendar day — both the filename's date and every `timestamp`
-value are UTC, deliberately with no local-timezone reference anywhere,
-so a file's contents are unambiguous regardless of where the phone
-travels. This is specifically so a future "give me Tuesday's drive"
-analysis is just picking a file, not filtering timestamps out of a
-single ever-growing log.
+**UTC** calendar day — deliberately no local-timezone reference anywhere,
+so a file's contents stay unambiguous regardless of where the phone
+travels, and a future "give me Tuesday's drive" query is just picking a
+file. UTC matters concretely for a car: a drive can cross timezone
+boundaries or a DST transition mid-session, and local timestamps would
+make that shift look like a rotation event (or a clock going backward)
+even though nothing about the drive changed. `applog`'s timestamps
+(section 6.2) are UTC for the same reason, so both logs stay
+correlatable regardless of trip location.
 
-UTC matters concretely for a car, not just in principle: a drive can
-cross timezone boundaries (or a daylight-saving transition) mid-session,
-and the phone's local clock/zone can shift under the app without any
-readings actually stopping. Local timestamps would make that shift look
-like a rotation event mid-file (or, worse, a clock going *backward*,
-e.g. crossing from Mountain to Pacific time), even though nothing about
-the drive changed. UTC has no such boundary to cross — `applog`'s
-timestamps (section 6.2) are UTC for the identical reason, so both logs
-stay correlatable by timestamp regardless of where the trip started or
-ended.
+Rotation is checked on every `Append`, keyed off the *reading's own*
+timestamp rather than wall-clock-at-write — handles both reopening the
+app after a gap (resumes today's file if one exists) and a drive
+spanning UTC midnight mid-session (rotates the moment a post-midnight
+reading is appended). The header is written based on a post-open size
+check rather than a pre-open existence check, so a 0-byte file from a
+previously failed header write gets retried rather than treated as
+already-headered.
 
-Rotation is checked on every `Append` call, keyed off the *reading's own*
-timestamp rather than wall-clock-at-write-time: if it falls on a
-different UTC day than the currently-open file, the old file is closed
-(best-effort — a failed close doesn't block opening the new file) and
-the new day's file is opened, writing the header only if it's empty
-after opening — a post-open size check rather than a pre-open existence
-check, so a file left at 0 bytes by a previously failed header write
-gets the header retried on the next resume instead of being treated as
-already-headered forever. This one code path handles both cases the day
-boundary can be crossed: reopening the app hours or days later (resumes
-today's file if one already exists for today, rather than duplicating
-the header or losing yesterday's data), and a drive that spans UTC
-midnight mid-session (rotates the moment a reading dated after midnight
-is appended, not just at the next app restart).
+No SQLite, no cgo — trivial to inspect with `adb pull` and any
+CSV-aware tool, trivial to replace with a real DB later if needed.
 
-No SQLite, no cgo dependency, nothing to migrate — trivial to inspect
-with `adb pull` and any spreadsheet tool or `csv`-aware shell tool,
-trivial to replace with a real DB later if querying needs grow.
+`storage.LoadReadings` re-reads today's file for trend/anomaly detection
+(section 4 step 6) — a row that fails to parse is skipped, not fatal;
+a file that can't be read at all (as opposed to not existing yet) is a
+real error.
 
-`storage.LoadReadings` reads today's file back into memory — the one
-other consumer of this format, used by trend/anomaly detection (section 4
-step 6) rather than anything Kotlin calls directly. A row that fails to
-parse is skipped rather than failing the whole read (skips forward past
-CSV-syntax-level damage instead, e.g. a torn final line from an unclean
-process kill mid-write); a file that can't be read at all — as opposed to
-simply not existing yet — is a real error.
-
-On every `NewSession` call (i.e., every Bluetooth connection), `mobile.Session`
-prunes reading-log files down to the 30 most recent by filename count, not
-by age: if the phone sits unused for two months, all 30 retained files can
-be well over 30 calendar days old — the rule is simply "keep the newest 30
-`readings-*.csv` files, delete the rest," never a calendar-day cutoff. Pruning
-happens after storage initialization succeeds but before the session is ready
-to accept data, and a failure to prune doesn't block session creation (it's
-logged as an error but treated as best-effort cleanup, not a precondition for
-the app to work).
+On every new Bluetooth connection, `mobile.Session` prunes reading-log
+files to the 30 most recent by filename count, not age — if the phone
+sits unused for months, all 30 retained files can be well over 30
+calendar days old. Best-effort: a failed prune doesn't block session
+creation.
 
 ### 6.2 App/error log
 
-Separate from the reading log deliberately: `internal/applog` is a
-small, best-effort, plain-text log (not CSV — this is heterogeneous,
-unstructured data, unlike the reading log's tabular data) for errors and
-debug messages, at `/data/data/<pkg>/files/app.log`. It doesn't need the
-reading log's day-based rotation (there's no "which day's errors" query
-this needs to support) — instead it's a single file capped at
-`applog.MaxSizeBytes` (10MB), and on exceeding that, the current file is
-renamed aside to `app.log.1` (any existing `.1` is discarded first — one
-kept prior file, not unbounded growth) and a fresh file started. If the
-rename itself fails (e.g. transient I/O error), the current file was
-never actually renamed away, so it's simply reopened at the same path —
-logging keeps working (just without having rotated that time) rather
-than going dark for the rest of the process over a rotation failure.
+`internal/applog` is a small, best-effort, plain-text log (not CSV —
+heterogeneous data, unlike the reading log) for errors/debug messages at
+`/data/data/<pkg>/files/app.log`, capped at `applog.MaxSizeBytes` (10MB).
+On exceeding that, the current file is renamed to `app.log.1` (any
+existing `.1` discarded first) and a fresh file started; if the rename
+itself fails, the file is simply reopened at the same path rather than
+going dark.
 
-Reachable from both sides of the Go/Kotlin split, per section 3's
-Go/Kotlin division of responsibilities: `mobile.LogError`/
-`mobile.LogDebug` are package-level (not tied to any one `Session` —
-a `Session` is recreated on every Bluetooth reconnect, but the app log
-must stay open across that churn) gomobile exports Kotlin calls into
-`ObdForegroundService`'s existing `Log.w` sites, and Go's own error
-paths write to the same log, including `mobile.go`'s reading-append
-path (see `docs/defects.md` for the swallowed-error bug this fixed).
+`mobile.LogError`/`mobile.LogDebug` are package-level gomobile exports
+(not tied to any one `Session`, which is recreated on every reconnect,
+but the app log must stay open across that churn), called from both
+`ObdForegroundService`'s Kotlin log sites and Go's own error paths —
+including `mobile.go`'s reading-append path (see `docs/defects.md` for
+the swallowed-error bug this fixed).
 
-Every write here is best-effort by design: a logging failure must never
-crash or block the app it's attached to, so both the Go side
-(`internal/applog`) and the Kotlin call sites (`Mobile.initAppLog`/
-`Mobile.closeAppLog`, wrapped in `catch (e: Throwable)` — not just
-`Exception` — in `ObdForegroundService.onCreate()`/`onDestroy()`) treat
-any failure here as something to log-and-continue past, never to
-propagate. That `Throwable` (rather than `Exception`) catch is load-
-bearing, not defensive-programming theater: gomobile's generated
-`Mobile` class does native-library loading in its static initializer,
-and a failure there surfaces as `UnsatisfiedLinkError`/
-`ExceptionInInitializerError` — `Error` subtypes a plain
-`catch (e: Exception)` does not catch, which would otherwise crash the
-whole foreground service over what is, at worst, a logging feature not
-working.
+Every write here is best-effort by design — a logging failure must
+never crash or block the app. `Mobile.initAppLog`/`closeAppLog` are
+wrapped in `catch (e: Throwable)`, not just `Exception`, in
+`ObdForegroundService.onCreate()`/`onDestroy()`: gomobile's `Mobile`
+class does native-library loading in its static initializer, and a
+failure there surfaces as `UnsatisfiedLinkError`/
+`ExceptionInInitializerError` — `Error` subtypes a plain `Exception`
+catch would miss, crashing the service over what is at worst a logging
+feature not working.
 
-That same native-library-on-first-touch behavior is also why every
-`Mobile.*` call from an Activity in this codebase is dispatched off the
-main thread — via each Activity's own `scope.launch(Dispatchers.IO) {
-... }` — rather than called inline. It's not just about keeping
-`app.log`'s disk write off the UI thread: under Robolectric (plain-JVM
-unit tests, section 13), there's no native `libgojni.so` to load at
-all, so a synchronous `Mobile.*` call reached during `onCreate()`
-throws `UnsatisfiedLinkError` and fails the test outright.
-`StatusActivity` and `DeviceScanActivity` both follow this pattern for
-every `Mobile.*` call (see `docs/defects.md` for the regression this
-rule traces to).
+That same native-library-on-first-touch behavior is why every
+`Mobile.*` call from an Activity is dispatched off the main thread —
+via `scope.launch(Dispatchers.IO) { ... }` — rather than called inline.
+Under Robolectric (plain-JVM unit tests, section 13) there's no native
+`libgojni.so` to load at all, so a synchronous `Mobile.*` call reached
+during `onCreate()` throws `UnsatisfiedLinkError` and fails the test
+outright. `StatusActivity` and `DeviceScanActivity` both follow this
+rule — every `Mobile.*` call from an Activity is dispatched off the
+main thread (see `docs/defects.md` for the regression this traces to).
 
-Every build also stamps a `BuildConfig.GIT_COMMIT` field (the output of
-`git rev-parse --short=12 HEAD` at build time, `"unknown"` if git isn't
-available), and `StatusActivity` logs it once via `Mobile.logDebug` on
-app startup — so a log export can be matched to the exact build that
-produced it (see `docs/defects.md`). Section 5.1 covers the matching
-scan-lifecycle logging in `DeviceScanActivity`.
+Two build-identification diagnostics, both motivated by log evidence
+that turned out to predate the fix it was meant to confirm (see
+`docs/defects.md`):
+- `BuildConfig.GIT_COMMIT` (`git rev-parse --short=12 HEAD` at build
+  time, `"unknown"` if git isn't available) is logged once via
+  `Mobile.logDebug` at app startup, so a log export can be matched to
+  the exact build that produced it.
+- `versionCode`/`versionName` are also build-time-derived, from `git
+  rev-list --count HEAD` (total commit count): `versionName =
+  "0.<count>"` (the `0.` prefix is deliberate — no stable release
+  exists yet), `versionCode` set to the same integer. Needs CI's
+  checkout to fetch full history (`fetch-depth: 0`) — unlike
+  `GIT_COMMIT` above, a commit *count* is meaningless from a shallow
+  checkout. Falls back to `1`/`"0.1"` if git is unavailable.
+  `StatusActivity` shows this in a small label on the status screen —
+  the version a driver would actually see and report, distinct from
+  `GIT_COMMIT`'s exact-build-matching role.
 
-Alongside that, `versionCode`/`versionName` (`android/app/build.gradle.kts`)
-are also derived at build time rather than hand-maintained: both come
-from `git rev-list --count HEAD` (the repo's total commit count),
-formatted as `versionName = "0.<count>"` — the `0.` prefix is
-deliberate, not a placeholder waiting to be bumped, since this app has
-no stable/1.0 release yet — with `versionCode` set to the same integer
-(Android requires a strictly-increasing integer for update ordering,
-which commit count naturally satisfies). This needs the CI checkout to
-fetch full history (`fetch-depth: 0` in `release-apk.yml`) — unlike
-`GIT_COMMIT` above, which only needs the current commit and works fine
-on the default shallow checkout, a commit *count* is meaningless
-without the full log. Falls back to `versionCode = 1`,
-`versionName = "0.1"` if git isn't available at all. `StatusActivity`
-displays `versionName` in a small label on the status screen — this is
-the version a driver would actually see and report, distinct from
-`GIT_COMMIT` above (which is for matching a specific `app.log` export
-to a build, not for at-a-glance display).
-
-A **"View App Logs"** button (`LogViewerActivity`) reads `app.log`
-directly for in-app viewing, without needing `adb`, a file manager, or
-the git-backup path (section 7) to be reachable at all — the intended
-use is exactly a moment when one of those isn't available or hasn't
-worked. Kotlin-only, same "framework plumbing, not business logic"
-precedent as `LogExporter` (section 3): `LogViewer.readTail()` is a
-small, directly-unit-testable file-reading helper, separate from the
-`LogViewerActivity` shell that displays it. Rather than loading the
-full file (capped at 10MB, above) into a single `TextView`, it reads
-only the last `TAIL_BYTES` (200KB) via `RandomAccessFile` — seeking
-near the end and discarding a leading partial line so the displayed
-text starts cleanly at a line boundary — with a truncation notice shown
-whenever the file is larger than that. A Refresh action re-reads the
-file, since `app.log` keeps growing live while monitoring runs. This
-complements, rather than replaces, "Export Logs" (section 3): the
-viewer is for a quick glance without leaving the app; export is still
-how the full file (plus the rotated `app.log.1` and reading CSVs)
-actually leaves the device.
+**"View App Logs"** (`LogViewerActivity`) reads `app.log` directly for
+in-app viewing, without needing `adb`, a file manager, or the
+git-backup path (section 7) reachable at all. Kotlin-only, same
+`LogExporter` precedent (section 3): `LogViewer.readTail()` is a small,
+directly-unit-testable helper that reads only the last 200KB via
+`RandomAccessFile` — not the full 10MB-capped file into one `TextView`
+— discarding a leading partial line so the text starts at a clean line
+boundary, with a truncation notice when the file is larger than that. A
+Refresh action re-reads, since `app.log` grows live while monitoring
+runs. Complements, not replaces, "Export Logs": the viewer is a quick
+in-app glance; export is still how the full file (plus `app.log.1` and
+the reading CSVs) actually leaves the device.
 
 ### 6.3 SSH key for log backup
 
-On-device ed25519 keypair, generated once and persisted in
-`/data/data/<pkg>/files/ssh/id_ed25519` (private, mode 0o600) and
-`/data/data/<pkg>/files/ssh/id_ed25519.pub` (public, mode 0o644), used
-to authenticate log backups to a remote git repository (see section 7's
-git-backup loop). Idempotent: the public key is cached on first call to
-`mobile.SSHPublicKey()` and reused forever — regenerating would silently
-orphan any deploy key already registered on the upstream repository.
+On-device ed25519 keypair, generated once and persisted at
+`/data/data/<pkg>/files/ssh/id_ed25519(.pub)` (modes 0o600/0o644), used
+to authenticate log backups to a remote git repository (section 7's
+git-backup loop). Idempotent — cached on first call to
+`mobile.SSHPublicKey()` and reused forever, since regenerating would
+orphan any deploy key already registered upstream.
 
-Generated via `crypto/ed25519` + `golang.org/x/crypto/ssh` in the Go core
-(`internal/sshkey` package), not shelled out, since Android provides no
-`ssh-keygen` binary. Surfaced to the status screen via a "Copy SSH Public
-Key" button — disabled until the key loads from disk on a background
-coroutine — so the user can register it as a GitHub deploy key without
-needing `adb`.
+Generated via `crypto/ed25519` + `golang.org/x/crypto/ssh` in
+`internal/sshkey`, not shelled out (Android has no `ssh-keygen`
+binary). Surfaced via a "Copy SSH Public Key" button, disabled until
+the key loads from disk on a background coroutine, so the user can
+register it as a GitHub deploy key without `adb`.
 
 ## 7. Background execution model
 
-- **Foreground Service**, not `WorkManager` — this needs a persistent,
-  long-lived Bluetooth socket, which is exactly the Foreground Service use
-  case (`ConnectedDevice` / `dataSync` foreground service type).
+- **Foreground Service**, not `WorkManager` — needs a persistent,
+  long-lived Bluetooth socket (`ConnectedDevice`/`dataSync` foreground
+  service type).
 - Started at app launch and (optionally) on `BOOT_COMPLETED`.
-- Shows a persistent low-priority notification (required by Android for
-  any foreground service) with current connection state.
-- On socket error/disconnect: exponential backoff reconnect loop, capped
-  (e.g. 30s max), rather than a tight retry loop draining the battery.
-- If no connection is ever reached (or re-reached) within 5 minutes —
-  counting time spent waiting on a missing Bluetooth permission too — the
-  service stops itself (`ConnectionState.TimedOut`) via the same
-  `stopServiceImmediately()` described below, rather than retrying
-  indefinitely against a dongle that's never going to answer (car parked
-  out of range, dongle unplugged, etc).
-- User will need to exempt the app from battery optimization
+- Shows a persistent low-priority notification with current connection
+  state, as Android requires for any foreground service.
+- On socket error/disconnect: exponential backoff reconnect, capped
+  (e.g. 30s max), not a tight battery-draining retry loop.
+- No connection within 5 minutes — including time waiting on a missing
+  Bluetooth permission — stops the service (`ConnectionState.TimedOut`)
+  rather than retrying forever against a dongle that's never going to
+  answer.
+- Needs the battery-optimization exemption
   (`ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS`) for reliable long-run
-  background behavior — call this out in-app and in the README.
-- **Stopping is synchronous and immediate, not just requested.** A "Stop
-  monitoring" / "Start Scanning" toggle button on the status screen, and a
-  "Stop" action on the persistent notification, both send `ACTION_STOP` to
-  `ObdForegroundService`. `stopServiceImmediately()` — the single teardown
-  path shared by a manual stop, Quit (next bullet), and the timeout above
-  — does three things, in order, and all three matter:
-  1. `connectionJob?.cancel()` — but cancellation alone cannot interrupt a
-     blocking call already in flight (`BluetoothSocket.connect()`,
-     `InputStream.read()`), so this only takes effect at the coroutine's
-     next suspension point.
-  2. `closeConnection()`, called directly rather than left to `onDestroy()`
-     — closing the socket is what actually unblocks a call from (1)
-     stuck mid-flight, from whichever thread it's stuck on.
-  3. `updateState()` with the terminal state, *then*
+  background behavior.
+- **Stopping is synchronous and immediate, not just requested.** A
+  Stop/Start toggle on the status screen and a notification "Stop"
+  action both send `ACTION_STOP`. `stopServiceImmediately()` — the
+  single teardown path shared by manual stop, Quit, and the timeout
+  above — does three things, in order:
+  1. `connectionJob?.cancel()` — cancellation alone can't interrupt a
+     blocking call already in flight (`connect()`, `read()`), so this
+     only takes effect at the next suspension point.
+  2. `closeConnection()`, called directly — unblocks a call from (1)
+     stuck mid-flight, from whichever thread it's on.
+  3. `updateState()` with the terminal state, then
      `stopForeground`+`stopSelf`.
 
   `StatusActivity` unbinds itself in direct response to any terminal
-  `ConnectionState` (`Stopped`, `TimedOut`) rather than that being
-  incidental to who happened to call `updateState()` — a Service stays
-  alive as long as it's started *or* bound, so a bound `StatusActivity`
-  left unhandled here would keep the service alive no matter how many
-  times `stopSelf()` is called. See `docs/defects.md` for the two real
-  bugs this teardown path fixed.
+  `ConnectionState` (`Stopped`, `TimedOut`) — a Service stays alive as
+  long as it's started *or* bound, so an unhandled bound Activity would
+  keep it alive regardless of `stopSelf()`. See `docs/defects.md` for
+  the two real bugs this three-step teardown fixed.
 
-  Resuming after a stop is **always explicit** — tapping "Start Scanning"
-  is the only way; reopening the app on its own does not resume
-  monitoring (a fresh launch that was never stopped is unaffected, and
-  still starts automatically as before).
-- **Quit App**: a second action, on both the notification and the status
-  screen, sends `ACTION_QUIT` — same teardown as Stop, then
-  `Process.killProcess(Process.myPid())`. This takes the whole app process
-  down, `StatusActivity` included, since everything runs in one process
-  (no multi-process manifest config) — the standard way an Android app
-  provides a true "exit," as opposed to Android's normal expectation that
-  the OS manages process lifecycle.
-- **`reconnectNow()`**: switching the selected device (section 5.1) calls
-  this rather than adding a fourth teardown path alongside Stop/Quit/the
-  no-connection timeout — it's deliberately lighter than
-  `stopServiceImmediately()`, just closing the current socket/session so
-  `connectionLoop`'s own retry logic reconnects using the new
-  `DeviceMAC()`, without touching `connectionJob`, without a terminal
-  `ConnectionState`, and without requiring "Start Scanning" afterward.
-- **Git backup loop** runs independently of the Bluetooth connection lifecycle,
-  launched once in `onCreate()` (not recreated on every `onStartCommand()` like
-  `connectionJob`) and cancelled once in `onDestroy()`. Backing up existing
-  logs shouldn't require an active OBD connection, so this uses the Service's
-  existing coroutine scope rather than introducing a second background-execution
-  model like `WorkManager` — same "single mechanism, not two" rationale as
-  `RECEIVE_BOOT_COMPLETED` reusing the Service rather than a separate receiver.
-  Checked every `GIT_BACKUP_CHECK_INTERVAL_MS` (5 minutes) — `gitbackup.Syncer`'s
-  own `syncInterval` is also 5 minutes, so in practice a push is attempted
-  every check, not just on a new log file. A failed push (no signal — the
-  motivating case is a drive through mountains with no cell service) is
-  never allowed to block anything: it's caught, logged via
-  `Mobile.logError`, and simply retried at the next 5-minute check, same
-  as any other check-cycle failure; `lastSynced` is only advanced on a
-  *successful* push, so a string of failures doesn't push the retry
-  further out. The network calls themselves (`PlainCloneContext`/
-  `PushContext`) are bounded by a short timeout rather than left to hang
-  on a half-open connection, so a bad-signal attempt fails fast instead of
-  occupying the loop until the next check would otherwise have fired.
-  A **"Git Push" button** on the status screen (`Mobile.forceSyncLogs`,
-  wrapping a new `Syncer.SyncNow` that shares `SyncIfNeeded`'s
-  clone/copy/commit/push logic but skips its gate check) triggers an
-  immediate, ungated push — for a driver who wants to confirm backup is
-  working right now rather than wait for the next automatic check.
-  SSH host-key verification is **pinned to GitHub's own published ed25519
-  host key**, not left to go-git's default: the key (fetched from
-  `https://api.github.com/meta`, GitHub's own authoritative source, not
-  transcribed from a docs page) is checked via `ssh.FixedHostKey`, with
-  `HostKeyAlgorithms` also set explicitly to `["ssh-ed25519"]` so that's
-  actually the key type negotiated (GitHub supports RSA and ECDSA host
-  keys too; without a stated preference, `FixedHostKey` can end up
-  rejecting whichever of those gets negotiated instead). This is also
-  the more secure choice regardless, given the remote is always the same
-  hardcoded GitHub host — no reason to accept whatever key an on-path
-  attacker might present, which `InsecureIgnoreHostKey()` would have
-  done. If GitHub ever rotates this key (it has, publicly, before), this
-  fails closed — pushes start erroring again — rather than silently
-  falling back to accepting an unverified key, which would be the worse
-  failure mode. See `docs/defects.md` for the two-stage SSH handshake
-  failure that led to pinning both the key and its algorithm.
+  Resuming after a stop is **always explicit** — tapping "Start
+  Scanning" is the only way; reopening the app alone does not resume
+  monitoring.
+- **Quit App**: same teardown as Stop, then `Process.killProcess()` —
+  takes the whole process down (everything runs in one process).
+- **`reconnectNow()`**: used when switching the selected device (section
+  5.1) rather than adding a fourth teardown path — deliberately lighter
+  than `stopServiceImmediately()`: just closes the current
+  socket/session so `connectionLoop`'s own retry logic reconnects with
+  the new `DeviceMAC()`, without touching `connectionJob`, without a
+  terminal `ConnectionState`, and without requiring "Start Scanning"
+  afterward.
+- **Git backup loop** runs independently of the Bluetooth lifecycle, in
+  the Service's own coroutine scope (started once in `onCreate()`,
+  cancelled in `onDestroy()`) rather than introducing `WorkManager` as a
+  second background mechanism. Checked every 5 minutes
+  (`GIT_BACKUP_CHECK_INTERVAL_MS`, matching `gitbackup.Syncer`'s own
+  `syncInterval`). A failed push (e.g. no cell signal on a mountain
+  drive) is caught, logged via `Mobile.logError`, and retried next
+  cycle — never blocks anything; `lastSynced` only advances on success.
+  Network calls (`PlainCloneContext`/`PushContext`) are timeout-bounded
+  so a bad-signal attempt fails fast. A **"Git Push"** button
+  (`Mobile.forceSyncLogs`, wrapping `Syncer.SyncNow` — which shares
+  `SyncIfNeeded`'s clone/copy/commit/push logic but skips its gate
+  check) triggers an immediate, ungated push. SSH host-key verification
+  is **pinned to
+  GitHub's own published ed25519 host key** (fetched from
+  `https://api.github.com/meta`) via `ssh.FixedHostKey`, with
+  `HostKeyAlgorithms` also set explicitly to `["ssh-ed25519"]` so
+  that's actually the key type negotiated — GitHub also supports RSA
+  and ECDSA host keys, and without a stated preference `FixedHostKey`
+  can end up rejecting whichever of those gets negotiated instead. This
+  fails closed if GitHub ever rotates the key, rather than silently
+  accepting an unverified one. See `docs/defects.md` for the two-stage
+  SSH handshake failure that led to pinning both the key and its
+  algorithm.
 
 ## 8. Permissions
 
-- `BLUETOOTH` and `BLUETOOTH_ADMIN` (`maxSdkVersion=30`) — the pre-API-31
-  normal permissions any Bluetooth API call requires; superseded by
-  `BLUETOOTH_CONNECT` on API 31+
-- `BLUETOOTH_CONNECT` (Android 12+, API 31+)
+- `BLUETOOTH` and `BLUETOOTH_ADMIN` (`maxSdkVersion=30`) — superseded by
+  `BLUETOOTH_CONNECT` on API 31+.
+- `BLUETOOTH_CONNECT` (Android 12+, API 31+).
 - `BLUETOOTH_SCAN` (Android 12+, API 31+) — requested at runtime by
-  `DeviceScanActivity` (section 5.1) before calling
-  `BluetoothAdapter.startDiscovery()`; not needed just to connect to an
-  already-selected, already-paired MAC, only to discover new ones — note
-  the Android shell must not call any SCAN-gated API (e.g.
-  `BluetoothAdapter.cancelDiscovery()`) without also requesting this at
-  runtime first, or the call fails with `SecurityException` on API 31+.
-  Declared with `android:usesPermissionFlags="neverForLocation"` (this
-  app never derives location from scan results) — without that flag,
-  Android additionally requires the *system* Location Services toggle to
-  be on for discovery to return any results at all on API 31+, silently
-  (no error, no exception — `startDiscovery()` just never finds
-  anything). This flag is API 31+ only (see `ACCESS_FINE_LOCATION` below
-  for API < 31). See `docs/defects.md` for the reports that led here.
+  `DeviceScanActivity` before `startDiscovery()`; not needed just to
+  connect to an already-paired MAC. The Android shell must not call any
+  SCAN-gated API (e.g. `BluetoothAdapter.cancelDiscovery()`) without
+  also requesting this first, or the call fails with
+  `SecurityException` on API 31+. Declared with
+  `android:usesPermissionFlags="neverForLocation"` (this app never
+  derives location from scan results) — without it, API 31+ also
+  silently requires system Location Services on for discovery to
+  return any results. API 31+ only (see `ACCESS_FINE_LOCATION` below
+  for API < 31). See `docs/defects.md`.
 - `ACCESS_FINE_LOCATION` (still required by some OEMs for classic
-  Bluetooth on API < 31) — on API 26-30, the *system* Location Services
-  toggle is also required for `startDiscovery()` to return results, the
-  same silent-empty-results failure mode as `BLUETOOTH_SCAN` above, but
-  with no `neverForLocation`-equivalent exemption available at all on
-  these API levels (`minSdk` is 26, section 11) — `DeviceScanActivity`
-  checks `LocationManager.isLocationEnabled()` before scanning on these
-  versions and tells the user directly rather than running a scan
-  that's guaranteed to find nothing.
-- `FOREGROUND_SERVICE` and `FOREGROUND_SERVICE_CONNECTED_DEVICE` (API 34+)
-- `POST_NOTIFICATIONS` (Android 13+, runtime-requested)
-- `RECEIVE_BOOT_COMPLETED` (optional, only if auto-start on boot is enabled)
-- `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` — pairs with the battery-optimization
-  exemption prompt described in section 7
-- `INTERNET` — needed for git backup to the remote `car_monitor_logs.git`
-  repository
+  Bluetooth on API < 31) — on API 26-30 there's no
+  `neverForLocation`-equivalent exemption at all (`minSdk` is 26,
+  section 11); `DeviceScanActivity` checks
+  `LocationManager.isLocationEnabled()` directly on these versions
+  instead.
+- `FOREGROUND_SERVICE` and `FOREGROUND_SERVICE_CONNECTED_DEVICE` (API 34+).
+- `POST_NOTIFICATIONS` (Android 13+, runtime-requested).
+- `RECEIVE_BOOT_COMPLETED` (optional, only if auto-start on boot is enabled).
+- `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` — pairs with section 7's
+  exemption prompt.
+- `INTERNET` — for git backup to `car_monitor_logs.git`.
 
 ## 9. Repo layout
 
@@ -740,18 +563,16 @@ build environment with one command.
 | Android NDK | `gomobile bind` cross-compiles Go with cgo enabled (JNI bridge), which needs NDK's clang toolchains | `26.1.10909125` |
 | `platform-tools` (adb) | Deploying/debugging on a device | latest |
 | `gomobile` / `gobind` | Builds the Go code into an Android `.aar` | `golang.org/x/mobile@latest` |
-| Android Studio | Optional, for editing/debugging the Kotlin shell with full tooling (layout preview, profiler, device manager). **Not required** to build — Gradle CLI + `sdkmanager` are sufficient — but installed by default for convenience | latest stable, via JetBrains' official archive |
+| Android Studio | Optional, full IDE tooling. **Not required** to build — Gradle CLI + `sdkmanager` suffice — but installed by default for convenience | latest stable, via JetBrains' official archive |
 
 Notes:
-- Everything is installed under the invoking user's home directory
-  (`~/Android/sdk`, `~/go`, `/opt/android-studio` for the Studio IDE) so the
-  script doesn't need to touch system Python/Java if the distro ships its
-  own — it uses its own pinned JDK/Go instead of relying on `apt`'s version.
-- The script is idempotent: re-running it skips anything already installed
-  at the pinned version and only patches `~/.bashrc`/`~/.profile` once.
-- Android Studio install can be skipped with `SKIP_ANDROID_STUDIO=1
-  ./scripts/setup_ubuntu.sh` for headless/CI boxes that only need the CLI
-  toolchain.
+- Everything installs under the invoking user's home directory
+  (`~/Android/sdk`, `~/go`, `/opt/android-studio`), using its own pinned
+  JDK/Go rather than the distro's.
+- Idempotent: re-running skips anything already at the pinned version,
+  patches `~/.bashrc`/`~/.profile` only once.
+- `SKIP_ANDROID_STUDIO=1 ./scripts/setup_ubuntu.sh` skips the IDE for
+  headless/CI boxes.
 
 ## 11. Build steps (after running the setup script)
 
@@ -768,242 +589,158 @@ cd ../../android
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
 
-`gofmt`, `go vet`, `go test ./...`, and `go build ./...` for the `go/`
-module run automatically on every commit via `githooks/pre-commit` (see
-`CLAUDE.md`). The `gomobile bind` / `gradlew` steps above are not part of
-that hook — they need the Android SDK/NDK and are slow — so run them
-manually whenever a change touches `android/` or `mobile`'s exported
-surface.
+`gofmt`, `go vet`, `go test ./...`, and `go build ./...` for `go/` run
+automatically on every commit via `githooks/pre-commit` (see
+`CLAUDE.md`). The `gomobile bind`/`gradlew` steps aren't part of that
+hook — they need the Android SDK/NDK and are slow — so run them manually
+whenever a change touches `android/` or `mobile`'s exported surface.
 
-`-androidapi 26` matches `android/app/build.gradle.kts`'s `minSdk`.
-Without it, `gomobile bind` defaults to API 16, which NDK 26 (the version
-`scripts/setup_ubuntu.sh` installs) no longer supports — the bind step
-fails immediately with "unsupported API version 16 (not in 21..34)".
+`-androidapi 26` matches `build.gradle.kts`'s `minSdk`; without it,
+`gomobile bind` defaults to API 16, which NDK 26 no longer supports —
+the bind step fails immediately with "unsupported API version 16 (not
+in 21..34)".
 
-Measured on a machine with the SDK/NDK/`gomobile` already installed:
-`gomobile bind` takes ~10s; `gradlew assembleDebug` takes ~1.5min on a
-clean checkout (downloading the Gradle distribution + AGP + dependencies)
-and ~10s on a warm rebuild.
+Measured with the SDK/NDK/`gomobile` already installed: `gomobile bind`
+~10s; `gradlew assembleDebug` ~1.5min on a clean checkout, ~10s warm.
 
 ### Pre-built APK
 
 A debug-signed APK is published to this repo's [GitHub
-Releases](../../releases) page under a single rolling `latest` release/tag,
-built by `.github/workflows/release-apk.yml` on every push to `main` that
-touches `android/**` or `go/**`. Installing on a phone is:
+Releases](../../releases) page under a single rolling `latest`
+release/tag, built by `.github/workflows/release-apk.yml` on every push
+to `main` touching `android/**` or `go/**`:
 
 ```sh
 gh release download latest -p 'car-monitor-debug.apk' -R howardkim0/car_monitor
 adb install -r car-monitor-debug.apk
 ```
 
-(or just download `car-monitor-debug.apk` from the release page in a
-browser and `adb install -r` it — or just tap it on-device once "install
-unknown apps" is allowed for the browser/Files app, no `adb` needed). The
-workflow deletes and recreates the `latest` release each run, so it always
-reflects the current `main` HEAD — there's no version history beyond what
-`git log` on `main` already gives you.
+(or download from the release page and `adb install -r`/tap it
+on-device). The workflow deletes and recreates `latest` every run, so it
+always reflects current `main` — no version history beyond `git log`.
 
-Build outputs are otherwise gitignored (`android/build/`,
-`android/app/build/`, `android/app/libs/*.aar`, `android/*.apk`) since
-they're regenerable from source; the APK used to be a tracked exception to
-that (committed straight to `main`), but that meant `git log`/`git blame`
-on the path weren't meaningful and `.git` grew by roughly the APK's size on
-every relevant change (git can't diff binaries) — publishing to Releases
-instead gets the same "always have a ready-to-sideload build" property
-without either cost.
+Build outputs are gitignored (regenerable from source) rather than
+committed, so `.git` doesn't grow by the APK's size on every change.
 
-**Signing.** The build stays the `debug` build type (`android:debuggable`
-is still `true` — this is not a hardened, Play-Store-style release build,
-and `isMinifyEnabled` is off), but `android/app/build.gradle.kts` gives it
-a stable signing key when four `CM_RELEASE_*` environment variables are
-present, which `release-apk.yml` sets from repo secrets
-(`RELEASE_KEYSTORE_BASE64`, `RELEASE_KEYSTORE_PASSWORD`, `RELEASE_KEY_ALIAS`,
-`RELEASE_KEY_PASSWORD`) — decoding the keystore to a `RUNNER_TEMP` path,
-never into the repo. Without those secrets configured, the build silently
-falls back to whatever ephemeral `debug.keystore` that CI run's fresh VM
-auto-generates, same as before this existed.
+**Signing.** The build stays the `debug` build type, but
+`android/app/build.gradle.kts` gives it a stable signing key when four
+`CM_RELEASE_*` env vars are present (`release-apk.yml` sets these from
+repo secrets — `RELEASE_KEYSTORE_BASE64`, `RELEASE_KEYSTORE_PASSWORD`,
+`RELEASE_KEY_ALIAS`, `RELEASE_KEY_PASSWORD` — decoding the keystore to a
+`RUNNER_TEMP` path, never into the repo). Without those secrets, it falls back to CI's ephemeral
+per-runner `debug.keystore`. This matters because Android refuses to
+install an APK over an existing app unless signatures match, and a
+fresh ephemeral keystore per CI runner would otherwise mean every
+`latest` release needs a manual uninstall to update. A local
+`./gradlew assembleDebug` is unaffected either way (uses that machine's
+own persistent debug keystore). See `docs/defects.md`.
 
-This matters because Android refuses to install an APK over an existing
-app unless the signatures match, and a fresh `debug.keystore` gets
-auto-generated on every CI runner (a new VM each run) — without a
-persistent key, every `latest` release would carry a different signature
-and updating would require uninstalling the old one first. A locally
-built `./gradlew assembleDebug` is unaffected either way (still signed
-with that machine's own persistent `~/.android/debug.keystore`); only CI
-builds need this. See `docs/defects.md` for the "Android build /
-release" entry this fixed.
-
-One migration note: a phone that already has a build installed from
-*before* the CI secrets were configured needs one manual uninstall — after
-that, every future `latest` release shares the same key and installs as a
-normal in-place update. Losing the keystore, or its passwords, means
-generating a new one and going through that same one-time uninstall again
-on every device; leaking it would let anyone produce an APK Android treats
-as a legitimate update to this app, so it's kept out of the repo entirely
-(GitHub secrets only, never committed — see `.gitignore`'s `*.keystore`/
-`*.jks` rules).
+One migration note: a phone with a build installed *before* the CI
+secrets were configured needs one manual uninstall; every release after
+that shares the same key and installs as a normal update. The keystore
+itself is GitHub-secrets-only, never committed (`.gitignore`'s
+`*.keystore`/`*.jks` rules) — leaking it would let anyone produce an APK
+Android treats as a legitimate update to this app.
 
 ## 12. Open questions / future work
 
-- Vehicle selection (unlike device selection, now resolved — section 5.1)
+- Vehicle selection (unlike device selection, resolved in section 5.1)
   is still hardcoded to `vehicle.Default()`. A bundled JSON asset, or
-  extending the device-picker UI to also cover vehicle profile, are both
-  additive given §5's interfaces.
+  extending the device-picker UI, are both additive given section 5's
+  interfaces.
 - DTC (fault code) reading/clearing is out of scope for v1 but fits the
   same PID-request pattern in `internal/obd2`.
-- `obd2.InitCommands()` (section 4 step 5) deliberately sends five
-  explicit `AT` setting commands instead of a full `ATZ` reset, on the
-  reasoning that each applies immediately without needing a reset —
-  standard ELM327 semantics, but unverified against real/clone hardware
-  in this dev environment (no Bluetooth device access, same caveat as
-  `COMMAND_INTERVAL_MS` below): some cheap clones are known to have
-  firmware quirks where a command like `ATSP0` doesn't fully re-trigger
-  protocol auto-search without a preceding reset. If a real device still
-  shows the zero-readings symptom this was meant to fix, `ATZ` (accepting
-  the ~1-2s reset cost on every reconnect) is the fallback to try.
+- `obd2.InitCommands()` (section 4 step 5) sends five explicit `AT`
+  commands instead of a full `ATZ` reset, on standard ELM327 semantics —
+  unverified against real/clone hardware in this dev environment (no
+  Bluetooth device access). Some cheap clones are known to need a reset
+  for `ATSP0` to fully re-trigger protocol auto-search; `ATZ` is the
+  fallback if the zero-readings symptom recurs on real hardware.
 - Long-term storage growth: day-rotated CSV (section 6.1) is fine for
-  early use; revisit if per-file size or cross-day query needs grow
-  (SQLite via a pure-Go driver to avoid reintroducing cgo/NDK complexity
-  for the app itself, e.g. `ncruces/go-sqlite3`).
-- Polling cadence (section 4 step 5) still lives as constants
-  (`COMMAND_INTERVAL_MS`/`POLL_CYCLE_MS`) in `ObdForegroundService`
-  rather than `internal/obd2` — *which* PIDs to request is now decided
-  in Go (section 5.2's discovery mechanism), but *how often* isn't yet,
-  since `Session` still exposes no timing info. Moving that into Go too
-  (e.g. an interval per `vehicle.Profile`, or per-`PID`) would let a
-  future vehicle with different sampling needs express that without
-  touching Kotlin.
-- `COMMAND_INTERVAL_MS` was raised from 50ms to **200ms** to be gentler on
-  the ELM327 adapter. At 200ms/command × 32 PIDs + 250ms
-  `POLL_CYCLE_MS`, one full cycle takes ~6.65s. Diagnostic logs now land
-  in the persistent app log (via `Mobile.logDebug`) to verify this against
-  real hardware: `writeLoop` logs active constants at session start and
-  then cycle count / elapsed time / actual cycle duration every ~9 cycles
-  (~1 min); `readLoop` logs bytes received on the first read and every
-  100 reads; Go's `obd2.Session` logs each discovery range as it resolves
-  (PID count, remaining ranges) and the final discovery outcome
-  (completed-by-response vs. timeout, elapsed time, total commands).
-  Read these from `adb shell cat /data/data/com.carmonitor.app/files/app.log`
-  after a short drive to tune the interval up or down based on real ELM327
-  behavior.
-- The diagnostics above cover *timing* but not *content* — they couldn't
-  distinguish "the adapter sent nothing" from "the adapter sent something
-  the parser doesn't recognize," which is exactly what made a real
-  zero-readings session (all polling on schedule, zero decode errors,
-  because unrecognized lines are silently treated as expected noise —
-  see `parseResponseBytes`'s doc comment) hard to diagnose from logs
-  alone. `obd2.Session.Feed` now logs the raw content of the first 20
-  lines received each session (quoted, via `%q`, so whitespace/formatting
-  differences like missing spaces or an unexpected header field are
-  directly visible) and a running `N lines received, M decoded as
-  readings` count every 100 lines — so a future session with real polling
-  but no data shows *what the adapter actually said*, not just that
-  nothing was decoded. `writeLoop` also logs each `InitCommands()` setup
-  command as it's sent (section 4 step 5) and a confirmation once the
-  sequence completes, to make it directly visible from the app log that
-  adapter setup ran at all, rather than inferring it from an absence of
-  the zero-readings symptom.
+  now; revisit with a pure-Go SQLite driver (e.g. `ncruces/go-sqlite3`,
+  avoiding cgo/NDK complexity) if per-file size or cross-day queries
+  grow.
+- Polling cadence still lives as constants (`COMMAND_INTERVAL_MS`/
+  `POLL_CYCLE_MS`) in `ObdForegroundService`, not Go — *which* PIDs to
+  request is decided in Go (section 5.2's discovery), but *how often*
+  isn't yet, since `Session` exposes no timing info.
+- `COMMAND_INTERVAL_MS` is 200ms (raised from 50ms to be gentler on the
+  adapter) — at 200ms/command × 32 PIDs plus 250ms `POLL_CYCLE_MS`, one
+  full poll cycle is ~6.65s. Diagnostic logs
+  (`writeLoop` cycle timing every ~9 cycles, `readLoop` bytes every 100
+  reads, Go's discovery-range resolution) land in `app.log` to verify
+  this against real hardware and tune if needed.
+- Those diagnostics cover *timing*, not *content* — `obd2.Session.Feed`
+  also logs the raw content of the first 20 lines each session (quoted,
+  so whitespace/header differences are visible) and a running
+  received/decoded count every 100 lines, plus each `InitCommands()`
+  step as it's sent, so a future zero-readings session shows *what the
+  adapter actually said* rather than just that nothing decoded.
 - `mobile.Session.CommandCount()`/`CommandAt(i)` are two separate JNI
-  calls, not one atomic snapshot. Now that `Commands()` can change
-  mid-flight (discovery resolving between the two calls), Kotlin's
-  `writeLoop()` could in principle see a `CommandAt` index that's gone
-  stale between the count and the fetch. Accepted as a known, low-severity
-  gap rather than fixed: the JNI boundary makes a single "return the whole
-  list" call the real fix, which isn't worth doing for a mismatch that
-  self-heals on the very next poll cycle (at most, one cycle skips or
-  double-requests a PID).
-- Trend/anomaly detection (section 4 step 6) re-reads and re-parses
-  *today's entire* CSV log from disk on every check, even though every
-  `internal/trend` check function only ever looks at the last 30s-5min of
-  it — acceptable for now (CSV parsing tens of thousands of simple rows
-  is still fast in absolute terms, and `ANOMALY_CHECK_INTERVAL_MS` is
-  deliberately coarse, once a minute), but a full-day drive means paying
-  that cost against a steadily growing file for the rest of the day.
-  If this shows up as measurably expensive on a real device, the fix is
-  incremental — track a byte offset and only read new rows since the last
-  check, keeping a small in-memory sliding window per metric — not
-  re-architecting the check functions themselves.
+  calls, not one atomic snapshot — `Commands()` changing mid-flight
+  (discovery resolving) could in principle produce a stale index between
+  them. Accepted as low-severity: self-heals on the next poll cycle, not
+  worth the "return the whole list" JNI redesign it'd take to fix.
 - `Session.CheckAnomalies`'s per-metric dedup state (`lastLevel`) is
-  scoped to the `Session`, not persisted across Bluetooth reconnects (a
-  new `Session` is created on each one), so an occasional duplicate
-  notification around a reconnect is possible. Accepted for the same
-  reason as the `CommandCount`/`CommandAt` gap above: the state would
-  need to move to a package-level variable (like `internal/applog`'s
-  logger) to survive `Session` recreation, which isn't worth the added
-  shared-mutable-state complexity for an edge case this cosmetic.
-- Only a metric moving to Warning/Critical ever notifies; there's no
-  "this recovered to Normal" notification. Deliberately out of scope for
-  v1 (the ask was "notify if an anomaly is found," not "and when it
-  isn't anymore") but worth revisiting — a driver who got a low-battery
-  alert earlier in a drive might reasonably want to know it's resolved.
-- `internal/monitor`'s metric-name constants (e.g. `"Coolant
-  Temperature"`) are matched against `vehicle.go`'s `PID.Name` fields by
-  exact string equality, with no compiler-enforced link between the two —
-  `monitor_test.go`'s `TestMetricNamesMatchVehicleProfile` guards against
-  a silent rename in one drifting away from the other, but a shared
-  source of truth (e.g. named constants `vehicle` exports and `monitor`
-  imports) would remove the possibility structurally instead of relying
-  on a test to catch it.
-- Manual log export from the app: a button on the status screen that
-  lets the user pull the on-device reading-log CSVs (and/or the app
-  log) off the phone without `adb` — most likely Android's share sheet
-  (`Intent.ACTION_SEND` with a zipped bundle of the day files), since
-  these live in app-private storage and aren't otherwise reachable.
+  scoped to the `Session`, not persisted across reconnects, so an
+  occasional duplicate notification around a reconnect is possible.
+  Accepted for the same reason as above — not worth the added
+  package-level shared-state complexity for a cosmetic edge case.
+- Only a metric moving to Warning/Critical notifies; there's no
+  "recovered to Normal" notification. Deliberately out of scope for v1,
+  worth revisiting.
+- `internal/monitor`'s metric-name constants are matched against
+  `vehicle.go`'s `PID.Name` fields by exact string equality, with no
+  compiler-enforced link — `TestMetricNamesMatchVehicleProfile` guards
+  against silent drift, but a shared source of truth would remove the
+  possibility structurally.
+- Trend/anomaly detection (section 4 step 6) re-reads and re-parses
+  *today's entire* CSV log on every check, even though each
+  `internal/trend` check only looks at the last 30s-5min of it —
+  acceptable for now (parsing is still fast in absolute terms, and the
+  check interval is deliberately coarse), but a full-day drive means
+  paying that cost against a steadily growing file. If this becomes
+  measurably expensive, the fix is incremental — track a byte offset and
+  keep a small in-memory sliding window per metric, not re-architecting
+  the check functions.
 
 ## 13. Testing
 
-**`go/`**: table-driven `testing` package tests, one file per source file
-(`obd2_test.go` next to `obd2.go`, etc.) — the existing, only convention.
-`githooks/pre-commit` enforces both that these pass and a 100% statement
-coverage floor (`go test -coverprofile=...` + `go tool cover -func=...`,
-see `CLAUDE.md`'s "Coverage is enforced" section for exactly how). A
-GitHub Actions workflow (`.github/workflows/coverage.yml`) re-runs the
-same check on push/PR and emails on any regression below 100% — a safety
-net for a bypassed local hook or a fresh clone, not the primary gate.
+**`go/`**: table-driven `testing` package tests, one file per source
+file. `githooks/pre-commit` enforces both passing tests and a 100%
+statement coverage floor (see `CLAUDE.md`). `.github/workflows/coverage.yml`
+re-runs the same check on push/PR and emails on any regression below
+100% — a safety net for a bypassed local hook or fresh clone, not the
+primary gate.
 
-**`android/`**: JUnit4 + [Robolectric](http://robolectric.org/) (runs
-Android framework code on the plain JVM — no emulator/device needed,
-which matters given this project's dev environment has no working KVM
-access) + [MockK](https://mockk.io/) for collaborators that Robolectric
-doesn't simulate well (`BluetoothSocket`). Test sources live in
-`android/app/src/test/java/com/carmonitor/app/`, run via
-`./gradlew testDebugUnitTest`. Dependencies are `testImplementation` in
-`app/build.gradle.kts`; `testOptions { unitTests { isIncludeAndroidResources = true } }`
-lets Robolectric resolve `R.string.*`/`R.layout.*` in tests. Coroutines
-are exercised against the real `Dispatchers.IO` rather than
-`kotlinx-coroutines-test`'s virtual time — `ObdForegroundService`'s `scope`
-has no injectable-dispatcher seam today, and adding one purely for test
-determinism (accepting a few real seconds of wall-clock time per test
-instead) wasn't judged worth the production-code change for what this
-suite currently needs; revisit if that stops being true.
-`ObdForegroundService.connectionJob`/`connectSocket()`/`ACTION_STOP`/`ACTION_QUIT`
-and `StatusActivity.isBound` are `internal` + `@VisibleForTesting` rather
-than `private`, specifically so these regression tests can observe them
-directly instead of reverse-engineering state through side effects.
+**`android/`**: JUnit4 + [Robolectric](http://robolectric.org/) (Android
+framework on the plain JVM — no emulator/KVM needed) +
+[MockK](https://mockk.io/) for collaborators Robolectric doesn't
+simulate well (`BluetoothSocket`). Tests live in
+`android/app/src/test/java/com/carmonitor/app/`, run via `./gradlew
+testDebugUnitTest`. Coroutines run against real `Dispatchers.IO` rather
+than `kotlinx-coroutines-test`'s virtual time — no injectable-dispatcher
+seam exists yet; revisit if that stops being cheap enough.
+`ObdForegroundService.connectionJob`/`connectSocket()`/`ACTION_STOP`/
+`ACTION_QUIT` and `StatusActivity.isBound` are `internal` +
+`@VisibleForTesting` rather than `private` so regression tests can
+observe them directly.
 
 **Coverage parity between `go/` and `android/` is a deliberate
-non-goal for now.** `go/` reaching a real, enforced 100% is
-straightforward — it's business logic with no framework I/O to mock. Doing
-the same for `android/` would mean exhaustively simulating every
-Bluetooth/Service-lifecycle framework interaction and failure mode through
-Robolectric/MockK, which is a materially larger and more speculative
-undertaking than closing five small gaps in pure Go functions. `android/`
-tests focus on regression coverage for bugs actually found (see below) —
-real, meaningful branches — over chasing a percentage. CI reports Android
-coverage (Kover) as a build artifact; it isn't gated. Revisit this once
-the Android test suite has enough real breadth that a numeric floor would
-mean something.
+non-goal.** `go/` reaching enforced 100% is straightforward (pure logic,
+no framework I/O to mock); doing the same for `android/` would mean
+exhaustively simulating every Bluetooth/Service-lifecycle interaction
+through Robolectric/MockK — a materially larger, more speculative
+undertaking. `android/` tests target regression coverage for bugs
+actually found, not a percentage. CI reports Android coverage (Kover) as
+a build artifact; it isn't gated.
 
-**Regression tests exist for bugs actually found during development**,
-per `CLAUDE.md`'s "every caught bug gets a regression test" — see
-`docs/defects.md` for what each bug was and why; the tests themselves
-are applied retroactively where they still test current behavior, not
-for behavior later deliberately removed (like the old
-auto-resume-on-reopen). `ACTION_QUIT` is deliberately *not* exercised
-through an automated test — its handler ends in
-`Process.killProcess(Process.myPid())`, which would kill the test JVM
-itself, not just an app-under-test process, and there's no Robolectric
-shadow worth trusting there. It shares `ACTION_STOP`'s exact
-`stopServiceImmediately()` call, which the `ACTION_STOP` test already
-covers; the kill call itself is one line, checked by direct code review.
+Regression tests exist for bugs actually found during development, per
+`CLAUDE.md`'s "every caught bug gets a regression test" — see
+`docs/defects.md` for what each bug was and why. `ACTION_QUIT` is
+deliberately not exercised through an automated test — its handler ends
+in `Process.killProcess(Process.myPid())`, which would kill the test JVM
+itself, and there's no Robolectric shadow worth trusting there. It
+shares `ACTION_STOP`'s exact `stopServiceImmediately()` call, which that
+test already covers; the kill call itself is one line, checked by
+direct code review.
