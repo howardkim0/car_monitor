@@ -294,13 +294,17 @@ func (s *Session) Feed(data []byte) {
 			s.logf("obd2: raw line %d: %q", s.linesReceived, string(line))
 		}
 
-		if s.tryHandleDiscoveryResponse(string(line)) {
+		// stripPrompt before parsing, not before logging above: the raw
+		// log should show exactly what was received, prompt included.
+		parsedLine := stripPrompt(string(line))
+
+		if s.tryHandleDiscoveryResponse(parsedLine) {
 			// Discovery response was handled; skip the normal parsing path.
 		} else {
 			// Track decoding: increment whenever parseLine succeeds, regardless
 			// of whether onReading is nil (the counter tracks "successfully decoded",
 			// not "delivered to listener").
-			if reading, ok := s.parseLine(string(line)); ok {
+			if reading, ok := s.parseLine(parsedLine); ok {
 				s.linesDecoded++
 				if s.onReading != nil {
 					s.onReading(reading)
@@ -371,10 +375,23 @@ func (s *Session) tryHandleDiscoveryResponse(line string) bool {
 	return true
 }
 
+// stripPrompt removes a leading ELM327 ready prompt ('>') from line, if
+// present. The prompt has no terminator of its own — the adapter sends
+// it immediately after a response's trailing '\r' with nothing
+// following — so once Feed splits purely on the terminator, it lands
+// glued onto the front of whatever line comes next (e.g.
+// ">41 0C 1A F8" instead of an empty line followed by a clean
+// "41 0C 1A F8"), corrupting an otherwise-valid response rather than
+// just appearing harmlessly on its own. See docs/defects.md.
+func stripPrompt(line string) string {
+	return strings.TrimLeft(line, ">")
+}
+
 // parseResponseBytes splits a response line into raw hex bytes and
 // confirms it's a positive response to a mode 01-09 request. Anything
-// that isn't — the ">" prompt, "SEARCHING...", "NO DATA", command echo,
-// blank lines — fails this and is ignored by both callers below.
+// that isn't — a lone ELM327 prompt already stripped down to "" by
+// stripPrompt, "SEARCHING...", "NO DATA", command echo, blank lines —
+// fails this and is ignored by both callers below.
 func parseResponseBytes(line string) ([]byte, bool) {
 	fields := strings.Fields(line)
 	if len(fields) < 2 {

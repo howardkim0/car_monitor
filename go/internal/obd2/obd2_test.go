@@ -286,6 +286,61 @@ func TestFeedIgnoresNonDataLines(t *testing.T) {
 	}
 }
 
+func TestStripPrompt(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"no prompt", "41 0C 1A F8", "41 0C 1A F8"},
+		{"leading prompt glued to data", ">41 0C 1A F8", "41 0C 1A F8"},
+		{"lone prompt", ">", ""},
+		{"empty line", "", ""},
+		{"only non-prompt leading char untouched", " 41 0C 1A F8", " 41 0C 1A F8"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := stripPrompt(tt.in)
+			if got != tt.want {
+				t.Errorf("stripPrompt(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
+// Reproduces the real-world byte stream that caused a genuine "adapter
+// is sending data, app writes nothing" session: the ELM327 ready prompt
+// has no terminator of its own, so it lands glued onto the front of the
+// next real response once Feed splits on \r alone.
+func TestFeedDecodesReadingWithGluedPromptPrefix(t *testing.T) {
+	s, readings := collectingSession()
+
+	s.Feed([]byte(">41 0C 1A F8\r"))
+
+	if len(*readings) != 1 {
+		t.Fatalf("got %d readings, want 1: %+v", len(*readings), *readings)
+	}
+	r := (*readings)[0]
+	if r.PID != 0x0C || r.Name != "Engine RPM" {
+		t.Errorf("reading = %+v, want PID 0x0C Engine RPM", r)
+	}
+}
+
+// tryHandleDiscoveryResponse must see the same prompt-stripped line as
+// parseLine does — a glued prompt on a "PIDs supported" bitmask
+// response shouldn't leave that range stuck unresolved either.
+func TestFeedResolvesDiscoveryRangeWithGluedPromptPrefix(t *testing.T) {
+	s := NewSession(vehicle.Default(), nil)
+
+	s.Feed([]byte(">" + discoveryResponseLine(0x00)))
+
+	got := s.Commands()
+	want := []string{"0120", "0140"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("Commands() after a glued-prompt discovery response for 0x00 = %v, want still-pending %v", got, want)
+	}
+}
+
 func TestFeedBuffersPartialLines(t *testing.T) {
 	s, readings := collectingSession()
 

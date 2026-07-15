@@ -42,6 +42,27 @@ class of bug is seeing what the adapter actually sent — added raw
 first-20-lines-per-session logging and a running received/decoded
 count. See `docs/open-questions.md`.
 
+**A second, distinct zero-readings bug, caught by the diagnostics
+above.** Symptom: "the scanner is sending data but the app is not
+writing anything" — a fresh log showed active `readLoop`/`writeLoop`
+traffic (bytes arriving on schedule, commands going out) alongside
+`obd2: stats: 6100 lines received, 0 decoded as readings (0%)`. The
+raw-line log (added in the follow-up above) showed why directly: every
+response line after the very first was prefixed with a stray `>`
+(e.g. `">41 20 90 1F B0 11 "` instead of `"41 20 90 1F B0 11 "`).
+Root cause: `Feed` splits strictly on `\r`, but the ELM327 ready prompt
+has no terminator of its own — the adapter emits it immediately after
+a response's trailing `\r` with nothing following it, so it lands
+glued onto the front of whatever line comes next once split. This
+wasn't the harmless standalone-`>`-line case `parseResponseBytes`
+already handled (see the entry above) — it corrupted an otherwise-valid
+response's first hex field (`>41` isn't valid hex), failing every
+single reading, every session, on every adapter, unconditionally (not
+adapter-state-dependent like the first bug). Fix: `stripPrompt` removes
+a leading `>` before parsing, applied after the raw-line diagnostic log
+so that still shows the unstripped bytes actually received. See
+`DESIGN.md` section 4 step 5.
+
 ## Bluetooth device scanning / pairing
 
 Three rounds of "the scan button doesn't work" reports against the
