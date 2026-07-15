@@ -104,7 +104,18 @@ class DeviceScanActivity : AppCompatActivity() {
             addAction(BluetoothAdapter.ACTION_DISCOVERY_FINISHED)
             addAction(BluetoothDevice.ACTION_BOND_STATE_CHANGED)
         }
-        ContextCompat.registerReceiver(this, discoveryReceiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED)
+        // RECEIVER_EXPORTED, not RECEIVER_NOT_EXPORTED: these three
+        // actions are sent by the Bluetooth stack, a privileged system
+        // process that doesn't run under this app's own UID.
+        // RECEIVER_NOT_EXPORTED silently drops broadcasts from
+        // processes like that (see DESIGN.md section 5.1 and
+        // docs/defects.md) — startDiscovery() still returns true and
+        // nothing errors, the receiver just never hears about any
+        // device found, ever, regardless of how many are actually in
+        // range. Safe to export: all three are AOSP protected
+        // broadcasts (<protected-broadcast> in the platform manifest),
+        // so no third-party app can spoof them.
+        ContextCompat.registerReceiver(this, discoveryReceiver, filter, ContextCompat.RECEIVER_EXPORTED)
 
         requestPermissions.launch(BluetoothPermissions.forScan())
     }

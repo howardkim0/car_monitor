@@ -118,6 +118,32 @@ the new calls the same way. See `DESIGN.md` section 6.2 for the
 resulting rule ("every `Mobile.*` call from an Activity is dispatched
 off the main thread").
 
+**Round 4 — genuinely zero devices found, with multiple devices in
+pairing mode 10cm from the phone.** The Round 3 diagnostics finally
+paid off: a fresh log showed `startDiscovery()` returning `true`,
+`locationEnabled=true`, and then `Scan stopped by user: found=0` after
+27 seconds — no `ACTION_FOUND` lines at all, not even one. Every prior
+round had addressed a real but secondary issue (a stuck button, a
+silent permission failure, two different Location-Services gaps)
+without ever questioning whether the receiver could receive broadcasts
+at all — until a report with devices confirmed physically present and
+discoverable ruled out "nothing nearby" as an explanation. Root cause:
+the discovery `BroadcastReceiver` was registered with
+`RECEIVER_NOT_EXPORTED` (added when `DeviceScanActivity` was first
+built, `d03c192`, and never revisited since). Per Android's own
+documentation, `RECEIVER_NOT_EXPORTED` silently drops broadcasts from
+"highly privileged apps, such as Bluetooth and telephony, that are
+part of the Android framework but don't run under the system's unique
+process ID" — exactly `ACTION_FOUND`/`ACTION_DISCOVERY_FINISHED`/
+`ACTION_BOND_STATE_CHANGED`, all sent by the Bluetooth stack. This had
+silently broken discovery from the very first `DeviceScanActivity`
+commit; none of Rounds 1-3's fixes could have surfaced it, since each
+found a real, independently-reproducible symptom of its own. Fix:
+`RECEIVER_EXPORTED` instead — safe, since all three actions are
+AOSP `<protected-broadcast>` entries only the system can ever send, so
+no third-party app can spoof them by exporting the receiver. See
+`DESIGN.md` section 5.1.
+
 ## Storage / app log
 
 **`mobile.go`'s reading-append path silently swallowed a failed

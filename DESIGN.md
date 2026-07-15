@@ -205,15 +205,27 @@ ceremony, not business logic):
   return `false` (adapter disabled, discovery already running) without
   throwing — and a `SecurityException` from a denied permission (scan,
   list bonded devices, read a device's name) surfaces as a visible
-  status message, not just a log line. Before scanning, `isLocationEnabled()` checks system
-  Location Services directly on API < 31 (no `neverForLocation`
-  exemption exists below API 31, section 8) and shows a message if it's
-  off, rather than running a scan guaranteed to find nothing. Status
-  text reports live progress — "Scanning… (N found)" / "Scan finished —
-  N found" — so an empty result reads as confirmed zero, not "stuck."
-  Every step is logged via `Mobile.logDebug` (section 6.2). See
-  `docs/defects.md` for the three-round investigation behind this
-  design.
+  status message, not just a log line. Before scanning,
+  `isLocationEnabled()` checks system Location Services directly on
+  API < 31 (no `neverForLocation` exemption exists below API 31,
+  section 8) and shows a message if it's off, rather than running a
+  scan guaranteed to find nothing. Status text reports live progress —
+  "Scanning… (N found)" / "Scan finished — N found" — so an empty
+  result reads as confirmed zero, not "stuck." Every step is logged via
+  `Mobile.logDebug` (section 6.2). The discovery `BroadcastReceiver` is
+  registered with `RECEIVER_EXPORTED`, not `RECEIVER_NOT_EXPORTED`:
+  `ACTION_FOUND`/`ACTION_DISCOVERY_FINISHED`/`ACTION_BOND_STATE_CHANGED`
+  are sent by the Bluetooth stack, a privileged system process that
+  doesn't run under the app's own UID — `RECEIVER_NOT_EXPORTED`
+  silently drops broadcasts from processes like that, with no error and
+  no effect on `startDiscovery()`'s own return value, so a scan
+  "worked" (permissions fine, discovery started) while finding nothing,
+  ever, regardless of how many discoverable devices were actually in
+  range. Exporting this receiver is safe: all three actions are
+  AOSP-protected broadcasts (`<protected-broadcast>` in the platform
+  manifest) that only the system can ever successfully send, so no
+  third-party app can spoof them. See `docs/defects.md` for the
+  four-round investigation behind this design.
 - **"Show Paired Devices"** — a lightweight `AlertDialog` (no new
   Activity) listing every device the phone has ever paired with, each
   with a status: `Connected`, `Selected` (next attempt will use it), or
