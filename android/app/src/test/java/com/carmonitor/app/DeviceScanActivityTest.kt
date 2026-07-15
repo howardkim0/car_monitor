@@ -55,6 +55,19 @@ class DeviceScanActivityTest {
         button.performClick() // must not throw
     }
 
+    @Test
+    fun `Show More button exists`() {
+        val activity = newActivity()
+        assertNotNull(activity.findViewById<Button>(R.id.showMoreButton))
+    }
+
+    @Test
+    fun `Show More button click does not crash with nothing discovered yet`() {
+        val activity = newActivity()
+        val button = activity.findViewById<Button>(R.id.showMoreButton)
+        button.performClick() // must not throw
+    }
+
     // Regression test: the discovery receiver was registered as
     // RECEIVER_NOT_EXPORTED, which silently drops broadcasts from
     // privileged system processes like the Bluetooth stack —

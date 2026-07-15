@@ -61,12 +61,13 @@
     <string name="location_services_required">Location Services must be on for scanning to find devices</string>
     <string name="device_scan_paired_section">Paired Devices</string>
     <string name="device_scan_available_section">Nearby Devices</string>
+    <string name="device_scan_show_more_button">Show More (remove OBD2 name filter)</string>
     <string name="device_scan_pairing">Pairing…</string>
     <string name="device_pairing_failed">Pairing failed</string>
     <string name="device_selected">%1$s selected</string>
     <string name="device_select_failed">Failed to select device — check app log</string>
     <string name="paired_devices_dialog_title">Paired Scanners</string>
-    <string name="paired_devices_none">No paired devices — use Pair Bluetooth OBD2 Scanners first</string>
+    <string name="paired_devices_none">No paired OBD2 scanners — use Pair Bluetooth OBD2 Scanners first</string>
     <string name="device_status_connected">Connected</string>
     <string name="device_status_selected">Selected</string>
     <string name="device_status_paired">Paired</string>

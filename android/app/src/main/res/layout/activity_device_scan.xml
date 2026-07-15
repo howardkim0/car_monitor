@@ -49,5 +49,12 @@
             android:layout_height="wrap_content"
             android:orientation="vertical" />
 
+        <Button
+            android:id="@+id/showMoreButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="@string/device_scan_show_more_button" />
+
     </LinearLayout>
 </ScrollView>

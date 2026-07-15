@@ -37,11 +37,17 @@ class DeviceScanActivity : AppCompatActivity() {
     private lateinit var scanButton: Button
     private lateinit var pairedContainer: LinearLayout
     private lateinit var availableContainer: LinearLayout
+    private lateinit var showMoreButton: Button
 
     private val scope = CoroutineScope(Dispatchers.Main + Job())
     private val discoveredAddresses = mutableSetOf<String>()
+    // Every device found this scan session, filtered or not — lets
+    // "Show More" reveal ones already hidden by DeviceNameFilter
+    // without needing to restart the scan.
+    private val discoveredDevices = mutableListOf<BluetoothDevice>()
     private var pairingDeviceAddress: String? = null
     private var isScanning = false
+    private var showAllDevices = false
 
     private val requestPermissions = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -58,17 +64,25 @@ class DeviceScanActivity : AppCompatActivity() {
             when (intent.action) {
                 BluetoothDevice.ACTION_FOUND -> {
                     val device = intent.getBluetoothDeviceExtra() ?: return
-                    logDebug("ACTION_FOUND: bondState=${device.bondState} alreadySeen=${discoveredAddresses.contains(device.address)}")
+                    val looksLikeObd2 = DeviceNameFilter.looksLikeObd2Scanner(rawDeviceName(device))
+                    logDebug(
+                        "ACTION_FOUND: bondState=${device.bondState} " +
+                            "alreadySeen=${discoveredAddresses.contains(device.address)} " +
+                            "looksLikeObd2=$looksLikeObd2"
+                    )
                     if (device.bondState != BluetoothDevice.BOND_BONDED && discoveredAddresses.add(device.address)) {
-                        addDeviceRow(availableContainer, device, isPaired = false)
-                        statusText.text = getString(R.string.device_scan_found_count, discoveredAddresses.size)
+                        discoveredDevices.add(device)
+                        if (looksLikeObd2 || showAllDevices) {
+                            addDeviceRow(availableContainer, device, isPaired = false)
+                            statusText.text = getString(R.string.device_scan_found_count, availableContainer.childCount)
+                        }
                     }
                 }
                 BluetoothAdapter.ACTION_DISCOVERY_FINISHED -> {
-                    logDebug("ACTION_DISCOVERY_FINISHED: found=${discoveredAddresses.size}")
+                    logDebug("ACTION_DISCOVERY_FINISHED: found=${availableContainer.childCount}")
                     isScanning = false
                     scanButton.text = getString(R.string.device_scan_button)
-                    statusText.text = getString(R.string.device_scan_finished_count, discoveredAddresses.size)
+                    statusText.text = getString(R.string.device_scan_finished_count, availableContainer.childCount)
                 }
                 BluetoothDevice.ACTION_BOND_STATE_CHANGED -> {
                     val device = intent.getBluetoothDeviceExtra() ?: return
@@ -97,7 +111,9 @@ class DeviceScanActivity : AppCompatActivity() {
         scanButton = findViewById(R.id.scanButton)
         pairedContainer = findViewById(R.id.pairedDevicesContainer)
         availableContainer = findViewById(R.id.availableDevicesContainer)
+        showMoreButton = findViewById(R.id.showMoreButton)
         scanButton.setOnClickListener { startScan() }
+        showMoreButton.setOnClickListener { showAllDiscoveredDevices() }
 
         val filter = IntentFilter().apply {
             addAction(BluetoothDevice.ACTION_FOUND)
@@ -144,7 +160,12 @@ class DeviceScanActivity : AppCompatActivity() {
         val adapter = (getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager).adapter
         pairedContainer.removeAllViews()
         try {
-            adapter?.bondedDevices?.forEach { device -> addDeviceRow(pairedContainer, device, isPaired = true) }
+            adapter?.bondedDevices
+                ?.filter { device ->
+                    DeviceNameFilter.looksLikeObd2Scanner(rawDeviceName(device)) ||
+                        RememberedDevices.isRemembered(this, device.address)
+                }
+                ?.forEach { device -> addDeviceRow(pairedContainer, device, isPaired = true) }
         } catch (e: SecurityException) {
             Mobile.logError("Failed to list bonded devices: $e")
             statusText.text = getString(R.string.bluetooth_permission_needed)
@@ -180,7 +201,7 @@ class DeviceScanActivity : AppCompatActivity() {
     private fun startScan() {
         val adapter = (getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager).adapter ?: return
         if (isScanning) {
-            logDebug("Scan stopped by user: found=${discoveredAddresses.size}")
+            logDebug("Scan stopped by user: found=${availableContainer.childCount}")
             try {
                 adapter.cancelDiscovery()
             } catch (e: SecurityException) {
@@ -188,7 +209,7 @@ class DeviceScanActivity : AppCompatActivity() {
             }
             isScanning = false
             scanButton.text = getString(R.string.device_scan_button)
-            statusText.text = getString(R.string.device_scan_finished_count, discoveredAddresses.size)
+            statusText.text = getString(R.string.device_scan_finished_count, availableContainer.childCount)
             return
         }
         val locationEnabled = isLocationEnabled()
@@ -199,6 +220,8 @@ class DeviceScanActivity : AppCompatActivity() {
         }
         availableContainer.removeAllViews()
         discoveredAddresses.clear()
+        discoveredDevices.clear()
+        showAllDevices = false
         val started = try {
             adapter.startDiscovery()
         } catch (e: SecurityException) {
@@ -217,6 +240,20 @@ class DeviceScanActivity : AppCompatActivity() {
         isScanning = true
         scanButton.text = getString(R.string.device_scan_stop_button)
         statusText.text = getString(R.string.device_scan_found_count, 0)
+    }
+
+    // Most cheap ELM327 clones can't be renamed, so the name filter
+    // needs a real bypass (DESIGN.md section 5.1): reveal every device
+    // found so far this session (discoveredDevices already has them,
+    // filtered or not) and stop filtering new ACTION_FOUND results too.
+    private fun showAllDiscoveredDevices() {
+        showAllDevices = true
+        availableContainer.removeAllViews()
+        discoveredDevices.forEach { device -> addDeviceRow(availableContainer, device, isPaired = false) }
+        statusText.text = getString(
+            if (isScanning) R.string.device_scan_found_count else R.string.device_scan_finished_count,
+            availableContainer.childCount
+        )
     }
 
     private fun addDeviceRow(container: LinearLayout, device: BluetoothDevice, isPaired: Boolean) {
@@ -254,6 +291,11 @@ class DeviceScanActivity : AppCompatActivity() {
 
     private fun selectDeviceAndFinish(device: BluetoothDevice) {
         val name = deviceName(device)
+        // Selecting any device — filter-matching or only reached via
+        // "Show More" — is a strong signal it's the driver's OBD2
+        // scanner, so it stays visible in both paired-devices listings
+        // from now on regardless of name (DESIGN.md section 5.1).
+        RememberedDevices.remember(this, device.address)
         scope.launch(Dispatchers.IO) {
             try {
                 Mobile.setSelectedDevice(filesDir.absolutePath, device.address, name)
@@ -271,8 +313,11 @@ class DeviceScanActivity : AppCompatActivity() {
         }
     }
 
+    private fun rawDeviceName(device: BluetoothDevice): String? =
+        try { device.name } catch (e: SecurityException) { null }
+
     private fun deviceName(device: BluetoothDevice): String =
-        try { device.name } catch (e: SecurityException) { null } ?: device.address
+        rawDeviceName(device) ?: device.address
 }
 
 @Suppress("DEPRECATION")

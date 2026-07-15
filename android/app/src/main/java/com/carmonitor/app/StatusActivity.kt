@@ -443,7 +443,12 @@ class StatusActivity : AppCompatActivity(), ObdForegroundService.StatusListener 
         }
         val adapter = (getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager).adapter
         val bonded = try {
-            adapter?.bondedDevices?.toList() ?: emptyList()
+            adapter?.bondedDevices
+                ?.filter { device ->
+                    val name = try { device.name } catch (e: SecurityException) { null }
+                    DeviceNameFilter.looksLikeObd2Scanner(name) || RememberedDevices.isRemembered(this, device.address)
+                }
+                ?: emptyList()
         } catch (e: SecurityException) {
             Mobile.logError("Failed to list bonded devices: $e")
             emptyList()
@@ -477,6 +482,7 @@ class StatusActivity : AppCompatActivity(), ObdForegroundService.StatusListener 
     }
 
     private fun selectDevice(mac: String, name: String) {
+        RememberedDevices.remember(this, mac)
         scope.launch(Dispatchers.IO) {
             try {
                 Mobile.setSelectedDevice(filesDir.absolutePath, mac, name)
