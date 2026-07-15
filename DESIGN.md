@@ -144,6 +144,18 @@ Kotlin-only rather than round-tripping through Go.
    Deliberately no `ATZ` full reset instead: that costs a real ~1-2s
    reset on some clones every reconnect, including the frequent
    transient ones the backoff loop (section 7) already retries.
+
+   `Feed` splits on `\r` alone, but the ELM327 ready prompt (`>`) has no
+   terminator of its own — the adapter emits it immediately after a
+   response's trailing `\r` with nothing following, so a strict `\r`
+   split leaves it glued onto the front of whatever line comes next
+   (`">41 0C 1A F8"` instead of an empty line followed by a clean
+   `"41 0C 1A F8"`) — corrupting an otherwise-valid response, not just
+   the harmless standalone-prompt case `parseResponseBytes` already
+   expects to ignore. `Feed` strips a leading `>` (`stripPrompt`) before
+   handing each line to discovery/decode, while still logging the raw,
+   unstripped bytes for diagnostics. See `docs/defects.md` for the
+   "adapter is sending data, app writes nothing" incident this fixes.
 6. Independently, a periodic `anomalyCheckLoop` (`ANOMALY_CHECK_INTERVAL_MS`,
    60s) calls `Session.CheckAnomalies()`, which re-reads today's CSV
    (`storage.LoadReadings`), groups it into per-metric time series via
