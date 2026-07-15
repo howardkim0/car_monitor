@@ -127,9 +127,9 @@ through `internal/applog`'s `LogError` instead, alongside adding the
 app/error log itself. See `DESIGN.md` section 6.2.
 
 **Logging from `DeviceScanActivity` (and anything else run before
-monitoring started) was a silent no-op.** Found via background
-investigation into why a reported scan session showed nothing in
-`app.log`. Root cause: `Mobile.initAppLog()` was only ever called from
+monitoring started) was a silent no-op.** Found via a background
+investigation task, then confirmed directly against the source before
+fixing. Root cause: `Mobile.initAppLog()` was only ever called from
 `ObdForegroundService.onCreate()` — and `LogDebug`/`LogError` are
 genuine no-ops on the Go side until that's run
 (`TestLogErrorAndLogDebugAreNoOpsBeforeInit`). Critically, that

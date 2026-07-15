@@ -56,7 +56,11 @@ The split:
   alert, git push, pair/show Bluetooth devices, stop/start scanning,
   quit) are a single vertically-stacked column, not a grid — label
   lengths vary too much (a two-line "Copy SSH Public Key" next to a
-  one-line "Quit App") to stay aligned in columns.
+  one-line "Quit App") to stay aligned in columns. The whole screen is
+  wrapped in a `ScrollView` — with this many buttons, an unscrollable
+  layout overflows the visible area on real phone screens, silently
+  pushing whatever's past the fold (see `docs/defects.md`) out of
+  reach.
 
 Go owns all interesting logic and tests; Kotlin is deliberately dumb I/O
 plumbing plus Android ceremony. Framework-only concerns — zipping logs
@@ -127,8 +131,8 @@ Kotlin-only rather than round-tripping through Go.
    ELM327 link and is skipped without logging.
 5. `internal/obd2` decides *which* PIDs to request (profile + discovery,
    section 5.2); Kotlin still decides polling cadence via a plain
-   constant (`docs/open-questions.md`). Before requesting any PID, `writeLoop` sends a
-   fixed ELM327 setup sequence once per connection —
+   constant (`docs/open-questions.md`). Before requesting any PID,
+   `writeLoop` sends a fixed ELM327 setup sequence once per connection —
    `obd2.InitCommands()` (`ATE0 ATL0 ATS1 ATH0 ATSP0`), exposed to
    Kotlin the same two-call way as `Commands()`/`CommandAt(i)`. Adapter
    settings (echo, headers, spacing, protocol) are RAM-resident and
@@ -289,9 +293,9 @@ profiles are editable without a rebuild; not needed for v1.
 
 `device.Default()` is runtime-overridable via 5.1's persisted-selection
 mechanism. `vehicle.Default()` is still a hardcoded function with no
-config file or UI (`docs/open-questions.md`) — the interface exists so swapping it out
-later (env var, JSON asset, extending the device-picker UI) is a
-localized change.
+config file or UI (`docs/open-questions.md`) — the interface exists so
+swapping it out later (env var, JSON asset, extending the device-picker
+UI) is a localized change.
 
 ## 6. Storage
 
@@ -583,4 +587,3 @@ itself, and there's no Robolectric shadow worth trusting there. It
 shares `ACTION_STOP`'s exact `stopServiceImmediately()` call, which that
 test already covers; the kill call itself is one line, checked by
 direct code review.
-
