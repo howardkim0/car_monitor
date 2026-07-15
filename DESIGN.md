@@ -231,7 +231,28 @@ ceremony, not business logic):
   with a status: `Connected`, `Selected` (next attempt will use it), or
   plain `Paired`.
 
-Both call `ObdForegroundService.reconnectNow()` after a selection
+Both flows — scan results and both paired-devices listings (the one
+inside "Pair Bluetooth OBD2 Scanners" itself, and `StatusActivity`'s
+separate "Show Paired Devices" dialog) — are filtered down to devices
+whose advertised name looks like an OBD2 scanner: `DeviceNameFilter`
+(pure Kotlin, no `device.Profile` state needed, so no Go round-trip —
+same "framework plumbing" territory as `LogViewer`, section 6.2) does a
+case-insensitive substring match against `"obd"`/`"elm"` — covering
+`ELM327`, `OBDLink`, `OBDII`, etc., including this repo's own hardcoded
+default device name (`"Garage OBDLink"`, above). A device whose name
+can't be read at all (permission not yet
+granted, or a nearby device that hasn't broadcast a name yet) is
+excluded, not shown by default — the goal is showing only OBD2
+scanners, not showing everything unless proven otherwise. This is
+purely a display filter: it doesn't change what `createBond()`/
+`setSelectedDevice()` can target, only which devices the two lists
+ever render, so a scanner with an unusual name is still reachable by
+renaming it (most ELM327 dongles support this) rather than needing an
+app change. Scan status text ("Scanning… (N found)") counts filtered,
+visible results, not raw discovery events, so the number on screen
+always matches what's actually listed.
+
+Both flows call `ObdForegroundService.reconnectNow()` after a selection
 change — closes the current socket/session so `connectionLoop`'s
 existing retry logic picks up the new `DeviceMAC()` on its next attempt;
 a no-op if the service isn't running (the new selection just applies
