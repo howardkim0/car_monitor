@@ -240,17 +240,31 @@ same "framework plumbing" territory as `LogViewer`, section 6.2) does a
 case-insensitive substring match against `"obd"`/`"elm"` — covering
 `ELM327`, `OBDLink`, `OBDII`, etc., including this repo's own hardcoded
 default device name (`"Garage OBDLink"`, above). A device whose name
-can't be read at all (permission not yet
-granted, or a nearby device that hasn't broadcast a name yet) is
-excluded, not shown by default — the goal is showing only OBD2
-scanners, not showing everything unless proven otherwise. This is
-purely a display filter: it doesn't change what `createBond()`/
-`setSelectedDevice()` can target, only which devices the two lists
-ever render, so a scanner with an unusual name is still reachable by
-renaming it (most ELM327 dongles support this) rather than needing an
-app change. Scan status text ("Scanning… (N found)") counts filtered,
-visible results, not raw discovery events, so the number on screen
-always matches what's actually listed.
+can't be read at all (permission not yet granted, or a nearby device
+that hasn't broadcast a name yet) is excluded, not shown by default —
+the goal is showing only OBD2 scanners, not showing everything unless
+proven otherwise. This is purely a display filter: it doesn't change
+what `createBond()`/`setSelectedDevice()` can target, only which
+devices the two lists ever render. Scan status text ("Scanning… (N
+found)") counts filtered, visible results, not raw discovery events, so
+the number on screen always matches what's actually listed.
+
+Most cheap ELM327 clones can't be renamed, so the filter needs a real
+escape hatch, not just "rename your dongle": a **"Show More"** button
+on the scan screen reveals every device found so far in the current
+scan session (Kotlin keeps the full, unfiltered discovery list in
+memory regardless of what's actually rendered) and stops filtering new
+`ACTION_FOUND` results for the rest of that session. Once the user
+selects *any* device — filtered-looking or not, reached via "Show
+More" or not — `RememberedDevices` persists its MAC (Kotlin-side
+`SharedPreferences`, not Go: this is UI-filter override state, not
+device protocol data, so it doesn't belong in `internal/device`
+alongside `SaveSelected`/`LoadSelected`) and both paired-devices
+listings show it from then on regardless of its name. A device is
+remembered the moment it's selected, not just when reached via "Show
+More" — selecting a filter-matching device is just as strong a signal
+("this is the driver's OBD2 scanner") as selecting one that only
+surfaced after removing the filter.
 
 Both flows call `ObdForegroundService.reconnectNow()` after a selection
 change — closes the current socket/session so `connectionLoop`'s
