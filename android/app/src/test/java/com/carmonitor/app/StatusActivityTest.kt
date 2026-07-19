@@ -141,6 +141,56 @@ class StatusActivityTest {
     }
 
     @Test
+    fun `Logs button expands and collapses its button group`() {
+        val activity = newActivity()
+        val logsGroup = activity.findViewById<android.view.View>(R.id.logsGroup)
+        assertEquals(
+            "logs group should start collapsed",
+            android.view.View.GONE,
+            logsGroup.visibility
+        )
+
+        activity.findViewById<android.widget.Button>(R.id.logsButton).performClick()
+        assertEquals(
+            "tapping Logs should expand the group",
+            android.view.View.VISIBLE,
+            logsGroup.visibility
+        )
+
+        activity.findViewById<android.widget.Button>(R.id.logsButton).performClick()
+        assertEquals(
+            "tapping Logs again should collapse the group back",
+            android.view.View.GONE,
+            logsGroup.visibility
+        )
+    }
+
+    @Test
+    fun `Settings button expands and collapses its button group`() {
+        val activity = newActivity()
+        val settingsGroup = activity.findViewById<android.view.View>(R.id.settingsGroup)
+        assertEquals(
+            "settings group should start collapsed",
+            android.view.View.GONE,
+            settingsGroup.visibility
+        )
+
+        activity.findViewById<android.widget.Button>(R.id.settingsButton).performClick()
+        assertEquals(
+            "tapping Settings should expand the group",
+            android.view.View.VISIBLE,
+            settingsGroup.visibility
+        )
+
+        activity.findViewById<android.widget.Button>(R.id.settingsButton).performClick()
+        assertEquals(
+            "tapping Settings again should collapse the group back",
+            android.view.View.GONE,
+            settingsGroup.visibility
+        )
+    }
+
+    @Test
     fun `Test Alert button posts a notification even when stopped by user`() {
         // Regression test: the Test Alert button (per DESIGN.md section 4
         // step 6) must work independently of whether the service is running

@@ -47,11 +47,15 @@ class StatusActivity : AppCompatActivity(), ObdForegroundService.StatusListener 
     private lateinit var statusText: TextView
     private lateinit var readingsText: TextView
     private lateinit var batteryOptimizationButton: Button
+    private lateinit var logsButton: Button
+    private lateinit var logsGroup: android.view.View
     private lateinit var exportButton: Button
     private lateinit var viewLogsButton: Button
     private lateinit var copySshKeyButton: Button
     private lateinit var testAlertButton: Button
     private lateinit var gitPushButton: Button
+    private lateinit var settingsButton: Button
+    private lateinit var settingsGroup: android.view.View
     private lateinit var pairDevicesButton: Button
     private lateinit var showPairedButton: Button
     private lateinit var stopButton: Button
@@ -134,6 +138,12 @@ class StatusActivity : AppCompatActivity(), ObdForegroundService.StatusListener 
         readingsText = findViewById(R.id.readingsText)
         batteryOptimizationButton = findViewById(R.id.batteryOptimizationButton)
         batteryOptimizationButton.setOnClickListener { requestBatteryOptimizationExemption() }
+        logsGroup = findViewById(R.id.logsGroup)
+        logsButton = findViewById(R.id.logsButton)
+        logsButton.setOnClickListener { toggleGroup(logsGroup) }
+        settingsGroup = findViewById(R.id.settingsGroup)
+        settingsButton = findViewById(R.id.settingsButton)
+        settingsButton.setOnClickListener { toggleGroup(settingsGroup) }
         exportButton = findViewById(R.id.exportButton)
         exportButton.setOnClickListener { exportLogs() }
         viewLogsButton = findViewById(R.id.viewLogsButton)
@@ -237,6 +247,15 @@ class StatusActivity : AppCompatActivity(), ObdForegroundService.StatusListener 
                 val (readingValue, readingUnit) = valueAndUnit
                 getString(R.string.reading_row_format, readingName, formatValue(readingValue), readingUnit)
             }
+        }
+    }
+
+    /** Toggles a button group between expanded and collapsed — used by the Logs/Settings buttons. */
+    private fun toggleGroup(group: android.view.View) {
+        group.visibility = if (group.visibility == android.view.View.VISIBLE) {
+            android.view.View.GONE
+        } else {
+            android.view.View.VISIBLE
         }
     }
 

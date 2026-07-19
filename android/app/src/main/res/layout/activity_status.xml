@@ -32,54 +32,86 @@
             android:text="@string/battery_optimization_button" />
 
         <Button
-            android:id="@+id/exportButton"
+            android:id="@+id/logsButton"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="8dp"
-            android:text="@string/export_logs_button" />
+            android:text="@string/logs_button" />
+
+        <LinearLayout
+            android:id="@+id/logsGroup"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:visibility="gone">
+
+            <Button
+                android:id="@+id/exportButton"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="@string/export_logs_button" />
+
+            <Button
+                android:id="@+id/viewLogsButton"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="@string/view_logs_button" />
+
+            <Button
+                android:id="@+id/gitPushButton"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="@string/git_push_button" />
+
+        </LinearLayout>
 
         <Button
-            android:id="@+id/viewLogsButton"
+            android:id="@+id/settingsButton"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="8dp"
-            android:text="@string/view_logs_button" />
+            android:text="@string/settings_button" />
 
-        <Button
-            android:id="@+id/copySshKeyButton"
+        <LinearLayout
+            android:id="@+id/settingsGroup"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:enabled="false"
-            android:text="@string/copy_ssh_key_button" />
+            android:orientation="vertical"
+            android:visibility="gone">
 
-        <Button
-            android:id="@+id/testAlertButton"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:text="@string/test_alert_button" />
+            <Button
+                android:id="@+id/pairDevicesButton"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="@string/pair_devices_button" />
 
-        <Button
-            android:id="@+id/gitPushButton"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:text="@string/git_push_button" />
+            <Button
+                android:id="@+id/showPairedButton"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="@string/show_paired_button" />
 
-        <Button
-            android:id="@+id/pairDevicesButton"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:text="@string/pair_devices_button" />
+            <Button
+                android:id="@+id/copySshKeyButton"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:enabled="false"
+                android:text="@string/copy_ssh_key_button" />
 
-        <Button
-            android:id="@+id/showPairedButton"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:text="@string/show_paired_button" />
+            <Button
+                android:id="@+id/testAlertButton"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="@string/test_alert_button" />
+
+        </LinearLayout>
 
         <Button
             android:id="@+id/stopButton"

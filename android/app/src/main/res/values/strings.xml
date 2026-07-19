@@ -30,6 +30,8 @@
     <string name="reading_row_format">%1$s: %2$s %3$s</string>
 
     <string name="battery_optimization_button">Exempt from battery optimization</string>
+    <string name="logs_button">Logs</string>
+    <string name="settings_button">Settings</string>
     <string name="export_logs_button">Export Logs</string>
     <string name="export_logs_chooser_title">Share logs via</string>
     <string name="export_logs_failed">Log export failed. Check app logs for details.</string>

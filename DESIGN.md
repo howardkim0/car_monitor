@@ -51,16 +51,19 @@ The split:
 - **Kotlin shell** (`android/`): the smallest glue possible — a
   `Foreground Service` that opens the Bluetooth socket and streams bytes
   to/from Go, plus permissions, the persistent notification, boot-start,
-  and one status Activity. Its action buttons (battery-optimization
-  exemption, export logs, view app logs, copy SSH public key, test
-  alert, git push, pair/show Bluetooth devices, stop/start scanning,
-  quit) are a single vertically-stacked column, not a grid — label
-  lengths vary too much (a two-line "Copy SSH Public Key" next to a
-  one-line "Quit App") to stay aligned in columns. The whole screen is
-  wrapped in a `ScrollView` — with this many buttons, an unscrollable
-  layout overflows the visible area on real phone screens, silently
-  pushing whatever's past the fold (see `docs/defects.md`) out of
-  reach.
+  and one status Activity. Its action buttons are a single
+  vertically-stacked column, not a grid — label lengths vary too much
+  (a two-line "Copy SSH Public Key" next to a one-line "Quit App") to
+  stay aligned in columns. Most of them are grouped behind two
+  collapsible toggles to keep the always-visible list short: "Logs"
+  expands to export logs / view app logs / git push, and "Settings"
+  expands to pair/show Bluetooth devices, copy SSH public key, and test
+  alert; tapping either toggle again collapses its group. Battery-
+  optimization exemption, stop/start scanning, and quit stay outside
+  both groups, always visible. The whole screen is wrapped in a
+  `ScrollView` — with this many buttons, an unscrollable layout
+  overflows the visible area on real phone screens, silently pushing
+  whatever's past the fold (see `docs/defects.md`) out of reach.
 
 Go owns all interesting logic and tests; Kotlin is deliberately dumb I/O
 plumbing plus Android ceremony. Framework-only concerns — zipping logs
