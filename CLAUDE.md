@@ -65,6 +65,34 @@ instead of writing it inline. Reserve Sonnet/Opus for planning,
 architecture decisions, review, and judgment calls. Batch independent
 Haiku tasks in parallel.
 
+## Feature workflow: design before implementation
+
+When adding or adjusting a feature, follow this order — design comes
+before implementation, never bundled after or retrofitted to match
+code that already exists:
+
+1. **Update DESIGN.md first**, per "DESIGN.md is timeless" above,
+   before writing any implementation code for the feature.
+2. **Architect-persona review of the design edit** — see "DESIGN.md
+   edits need an Architect pass first" immediately below.
+3. **Commit and push the design doc change to `main`**, once the
+   architect pass is clean. This is pre-authorized for this specific
+   commit — no need to ask before pushing it.
+4. **Implement** the feature to match the now-committed design.
+5. **Commit and push the implementation to `main`**, after the
+   two-persona review described in "Two-persona review before every
+   commit" below. This push is also pre-authorized.
+
+This ordering applies to feature additions/adjustments specifically —
+small fixes, refactors, and doc-only tweaks that don't touch
+DESIGN.md-relevant behavior stay on the lighter existing process (edit,
+review, commit together when asked).
+
+The pre-authorization in steps 3 and 5 is scoped narrowly to pushing
+these two commits to `main` as part of this workflow — it does not
+relax the general defaults elsewhere (confirm before force-push,
+confirm before other destructive or shared-state operations).
+
 ## DESIGN.md edits need an Architect pass first
 
 Any DESIGN.md edit, however small, gets an explicit Architect-persona

@@ -75,12 +75,12 @@ both together per `CLAUDE.md`.
   as a resource in the pinned `androidx.car.app:app:1.7.0` — re-verify
   this whenever that dependency version bumps, and confirm on a real
   signed build (not just the always-permissive debug path) before any
-  release. — issue not yet filed, see note below
+  release. — [#13](../../../issues/13)
 - **Pair Scanner on the car screen is bonded-devices-only, not full
   discovery** (`DESIGN.md` section 11) — deliberate for v1 (driver
   distraction guidelines; discovery/pairing UI can't be hosted by a
   `Screen` anyway), but worth revisiting if bonded-only proves too
-  limiting in practice. — issue not yet filed, see note below
+  limiting in practice. — [#14](../../../issues/14)
 - **Android Auto support is unverified against a real head unit or the
   Desktop Head Unit (DHU)** — this dev environment has no way to run
   DHU or a physical head unit, so `carapp/`'s classes are verified only
@@ -90,11 +90,4 @@ both together per `CLAUDE.md`.
   dispatch clicks directly instead of through the full lifecycle).
   Same category of gap as `obd2.InitCommands()` (#4) and
   `COMMAND_INTERVAL_MS` (#7) being unverified against real hardware. —
-  issue not yet filed, see note below
-
-**Note on the 3 entries above:** this environment doesn't have the
-`gh` CLI installed, so — unlike every other entry in this file — these
-weren't mirrored as filed GitHub issues at the time they were added,
-breaking this doc's usual doc-and-issue-tracker convention. File issues
-#13, #14, #15 (next in sequence) for the three items above and replace
-this note with real issue links once that's done.
+  [#15](../../../issues/15)
