@@ -36,6 +36,8 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="8dp"
+            android:backgroundTint="@color/toggle_button_background"
+            android:textColor="@color/toggle_button_text"
             android:text="@string/logs_button" />
 
         <LinearLayout
@@ -73,6 +75,8 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="8dp"
+            android:backgroundTint="@color/toggle_button_background"
+            android:textColor="@color/toggle_button_text"
             android:text="@string/settings_button" />
 
         <LinearLayout
