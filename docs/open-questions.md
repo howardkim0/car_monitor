@@ -69,3 +69,32 @@ both together per `CLAUDE.md`.
   file. If this becomes measurably expensive, the fix is incremental —
   track a byte offset and keep a small in-memory sliding window per
   metric, not re-architecting the check functions. — [#12](../../../issues/12)
+- **`CarMonitorCarAppService`'s release `HostValidator` allowlist
+  (`DESIGN.md` section 11) hasn't been checked against a real signed
+  release build.** Verified only that `hosts_allowlist_sample` exists
+  as a resource in the pinned `androidx.car.app:app:1.7.0` — re-verify
+  this whenever that dependency version bumps, and confirm on a real
+  signed build (not just the always-permissive debug path) before any
+  release. — issue not yet filed, see note below
+- **Pair Scanner on the car screen is bonded-devices-only, not full
+  discovery** (`DESIGN.md` section 11) — deliberate for v1 (driver
+  distraction guidelines; discovery/pairing UI can't be hosted by a
+  `Screen` anyway), but worth revisiting if bonded-only proves too
+  limiting in practice. — issue not yet filed, see note below
+- **Android Auto support is unverified against a real head unit or the
+  Desktop Head Unit (DHU)** — this dev environment has no way to run
+  DHU or a physical head unit, so `carapp/`'s classes are verified only
+  via Robolectric + `androidx.car.app:app-testing` (`docs/dev-setup.md`
+  documents known gaps in that harness — `ScreenController`'s template
+  tracking and `ScreenManager.pop()` didn't work reliably, so tests
+  dispatch clicks directly instead of through the full lifecycle).
+  Same category of gap as `obd2.InitCommands()` (#4) and
+  `COMMAND_INTERVAL_MS` (#7) being unverified against real hardware. —
+  issue not yet filed, see note below
+
+**Note on the 3 entries above:** this environment doesn't have the
+`gh` CLI installed, so — unlike every other entry in this file — these
+weren't mirrored as filed GitHub issues at the time they were added,
+breaking this doc's usual doc-and-issue-tracker convention. File issues
+#13, #14, #15 (next in sequence) for the three items above and replace
+this note with real issue links once that's done.

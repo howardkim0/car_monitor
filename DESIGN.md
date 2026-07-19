@@ -649,3 +649,113 @@ itself, and there's no Robolectric shadow worth trusting there. It
 shares `ACTION_STOP`'s exact `stopServiceImmediately()` call, which that
 test already covers; the kill call itself is one line, checked by
 direct code review.
+
+## 11. Android Auto
+
+A second UI surface — a car head unit screen — alongside `StatusActivity`,
+via the AndroidX Car App Library (`androidx.car.app`, phone-projection,
+not Android Automotive OS). `CarAppService`/`Session`/`Screen` all run
+in this same process, so nothing about Bluetooth I/O, the foreground
+service, or storage changes; the car screen is purely an additional UI
+surface, same architecture precedent as `DeviceScanActivity`/
+`LogViewerActivity` (section 3: framework-only concerns stay
+Kotlin-only). See `docs/plan-android-auto.md` for the full design
+reasoning and alternatives considered.
+
+**Entry point** (`android/app/src/main/java/com/carmonitor/app/carapp/`):
+`CarMonitorCarAppService` (manifest-declared, category
+`androidx.car.app.category.IOT` — a connected-device monitor, not
+navigation/parking/charging, alongside a `com.google.android.gms.car.application`
+meta-data entry pointing at `res/xml/automotive_app_desc.xml`, the
+Car App Library's own manifest-discovery mechanism) creates a
+`CarMonitorSession`, whose `onCreateScreen()` returns the root
+`MainCarScreen`. `HostValidator` is permissive in debug builds
+(`ALLOW_ALL_HOSTS_VALIDATOR`, so a DHU-connected dev build works with no
+extra config) and restricted to the Car App Library's own bundled
+known-hosts allowlist (`hosts_allowlist_sample`) in release builds.
+
+**`MainCarScreen`** is a `ListTemplate` with 4 rows, reusing the phone
+screen's own button strings verbatim (`start_scanning_button`,
+`pair_devices_button`, `view_logs_button`, `quit_app_button`). Only
+"Quit App" carries a tint (`#3A3A3A`, the same dark gray as the phone's
+`quitButton`) — the phone's `pairDevicesButton`/`viewLogsButton` have no
+special color either, so that part of the scheme carries over cleanly.
+The one deliberate departure: the phone's `stopButton` (which shows the
+"Start Scanning" string when stopped) is statically red
+(`#B3261E`, never cleared when its text changes), but the car screen's
+"Start Scanning" row stays untinted — red reads as a stop/destructive
+color, which doesn't fit an action whose whole purpose is *starting*
+monitoring. Tapping "Start Scanning" requests any missing
+Bluetooth/notification permissions via
+`CarContext.requestPermissions()` (the car-screen equivalent of
+`StatusActivity`'s `ActivityResultContracts.RequestMultiplePermissions`)
+and starts monitoring either way, matching `StatusActivity`'s own
+"start regardless, the service surfaces `PermissionMissing`" behavior.
+"Pair Scanner" and "Display Logs" push `PairScannerScreen`/`LogsScreen`;
+"Quit App" pushes `QuitConfirmationScreen` rather than quitting
+immediately — a single accidental tap while driving shouldn't kill the
+app, mirroring section 7's "resuming after a stop is always explicit"
+reasoning. `QuitConfirmationScreen` (`MessageTemplate`) has a primary
+"Quit" action (same `#3A3A3A` tint) that calls `AppQuit.quit()`, and a
+"Cancel" action that pops back.
+
+**`PairScannerScreen`** lists already-*bonded* devices only, not
+`DeviceScanActivity`'s full BLE discovery/pairing flow — a multi-step,
+attention-heavy flow that both fights Android's Driver Distraction
+Guidelines for in-car UI and can't be hosted by a `Screen` anyway
+(Screens can't launch arbitrary phone `Activity`s). Good enough to
+switch dongles mid-trip without exposing discovery behind the wheel.
+Always labels devices as `isConnected = false` (never "Connected," only
+ever "Selected" or "Paired") — unlike `StatusActivity`, this screen has
+no `StatusListener` wired to `ObdForegroundService`, so it can't
+actually tell whether the selected device is live. Display-only; worth
+revisiting if that distinction matters in practice.
+
+**`LogsScreen`** shows roughly the last 15 lines of `app.log` (via the
+existing `LogViewer.readTail()`, with a much smaller `maxBytes` than the
+phone's scrollable `LogViewerActivity`) in a `LongMessageTemplate`, with
+a "Refresh" action that re-reads. `LongMessageTemplate` requires its
+actions to use `ParkedOnlyOnClickListener` — the host itself enforces
+that reading/refreshing a long text block isn't something a driver does
+while moving, which fits this action well.
+
+**Shared logic, not duplicated logic.** Four things `StatusActivity`
+used to keep private were extracted into shared objects so both
+surfaces call one implementation — the same "one implementation, not
+two that can drift" reasoning as `AnomalyNotifications` (section 4 step
+6):
+- `MonitoringPrefs` — the `stoppedByUser` `SharedPreferences` flag.
+- `AppQuit` — the Quit teardown (`MonitoringPrefs` → `ObdForegroundService.quit()`
+  → an injectable `kill` callback, defaulting to `Process.killProcess()`;
+  injectable specifically so a test can verify the first two steps
+  without killing the test JVM).
+- `ObdDeviceLister` — bonded-device listing/labeling and selection,
+  shared by the phone's "Show Paired Devices" dialog and
+  `PairScannerScreen`. Owns no coroutine scope itself — `select()` is a
+  suspend function callers launch on their own lifecycle-scoped
+  coroutine (`StatusActivity`'s existing `scope`; a car `Screen`'s own
+  `lifecycleScope`, cancelled automatically when the `Screen` is
+  destroyed/popped).
+- `BluetoothPermissions.forServiceStart()` — the exact permission set
+  `ObdForegroundService` needs, requested identically by
+  `StatusActivity` and `MainCarScreen`.
+
+These 4 live in the flat `com.carmonitor.app` package (shared with
+`StatusActivity`); the 6 Car App Library-specific classes above live in
+the `carapp` subpackage — the first subpackage in `android/`, adopted
+once a cohesive, separable unit of files (6 of them) made the
+previously-flat package notably harder to scan.
+
+**Testing note.** `androidx.car.app:app-testing`'s `ScreenController`/
+`TestCarContext` harness has real gaps at the pinned library version:
+`ScreenController.getTemplatesReturned()` doesn't reliably populate,
+and `ScreenManager.pop()` requires a screen to have actually progressed
+through a real host-driven `Lifecycle`, which this harness doesn't
+establish for a screen that's just constructed and pushed directly
+(throws `IllegalStateException`/`NullPointerException` depending on
+exactly how). Tests instead call `Screen.onGetTemplate()` directly and
+dispatch row/action clicks via `onClickDelegate?.sendClick(object :
+OnDoneCallback {})`, asserting template contents and mocked
+(`MockK`'s `mockkObject`) side effects — real end-to-end navigation and
+lifecycle behavior is verified via the Desktop Head Unit instead (see
+`docs/dev-setup.md`).

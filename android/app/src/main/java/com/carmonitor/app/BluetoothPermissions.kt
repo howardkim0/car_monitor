@@ -25,4 +25,15 @@ object BluetoothPermissions {
         } else {
             emptyArray()
         }
+
+    /** Everything ObdForegroundService needs granted before starting —
+     * Bluetooth connect plus POST_NOTIFICATIONS on API 33+ (foreground
+     * services must show a notification). Shared by StatusActivity and
+     * the Android Auto car screen so both request the identical set. */
+    fun forServiceStart(): Array<String> =
+        forConnect() + if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            arrayOf(Manifest.permission.POST_NOTIFICATIONS)
+        } else {
+            emptyArray()
+        }
 }

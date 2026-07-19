@@ -231,11 +231,14 @@ needs the full package
   bare-string-literal dependency convention (no version catalog in
   this project):
   ```kotlin
-  implementation("androidx.car.app:app:1.8.0")
-  testImplementation("androidx.car.app:app-testing:1.8.0")
+  implementation("androidx.car.app:app:1.7.0")
+  testImplementation("androidx.car.app:app-testing:1.7.0")
   ```
-  (Verified against Google's Maven index at planning time — latest
-  stable, non-alpha/beta/rc release of both artifacts.)
+  (Verified directly against Google's Maven `maven-metadata.xml` for
+  both artifacts — 1.7.0 is the latest non-alpha/beta/rc release;
+  1.8.0 exists only as alpha/beta at time of writing. An earlier
+  WebFetch-based check during planning incorrectly reported 1.8.0 as
+  stable — corrected here against the authoritative source.)
 - `android/app/src/main/AndroidManifest.xml`:
   ```xml
   <meta-data

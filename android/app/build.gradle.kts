@@ -7,7 +7,7 @@ plugins {
 // Stamped into BuildConfig so a log export can be matched to the exact
 // commit that produced the running build — this session diagnosed the same
 // git-push SSH failure twice from log evidence before realizing the
-// installed APK predated the fix (see DESIGN.md section 12). Reads HEAD
+// installed APK predated the fix (see DESIGN.md section 6.2). Reads HEAD
 // directly rather than requiring full history, so it works against CI's
 // shallow checkout too; falls back to "unknown" if git isn't available at
 // all (e.g. building from a source archive with no .git directory).
@@ -68,7 +68,8 @@ android {
     // install a new one over the last (it looks like a different app) —
     // installing an update requires uninstalling first. Absent locally, so
     // `./gradlew assembleDebug` on a dev machine is unaffected and keeps
-    // using that machine's own debug.keystore. See DESIGN.md section 11.
+    // using that machine's own debug.keystore. See docs/dev-setup.md's
+    // "Signing" section.
     val ciKeystorePath = System.getenv("CM_RELEASE_KEYSTORE_PATH")
 
     if (ciKeystorePath != null) {
@@ -116,11 +117,15 @@ dependencies {
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("com.google.android.material:material:1.12.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.0")
+    implementation("androidx.car.app:app:1.7.0")
+    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.6.2")
 
-    // See DESIGN.md section 13: Robolectric (Android framework on the
-    // plain JVM, no emulator/device needed) plus MockK for BluetoothSocket
-    // and similar collaborators Robolectric doesn't simulate.
+    // See DESIGN.md section 10 and docs/dev-setup.md's "Testing tooling":
+    // Robolectric (Android framework on the plain JVM, no emulator/device
+    // needed) plus MockK for BluetoothSocket and similar collaborators
+    // Robolectric doesn't simulate.
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.robolectric:robolectric:4.13")
     testImplementation("io.mockk:mockk:1.13.11")
+    testImplementation("androidx.car.app:app-testing:1.7.0")
 }

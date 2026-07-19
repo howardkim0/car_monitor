@@ -130,4 +130,33 @@ Note for anyone touching `Mobile.*` call sites: under Robolectric
 there's no native `libgojni.so` to load, so a synchronous `Mobile.*`
 call reached during `onCreate()` throws `UnsatisfiedLinkError` and fails
 the test outright — see `DESIGN.md` section 6.2 for the
-dispatch-off-the-main-thread rule this requires.
+dispatch-off-the-main-thread rule this requires. `carapp/` tests that
+need to exercise `ObdDeviceLister` mock it with MockK's `mockkObject`
+(paired with `unmockkObject` in `@After` — it patches the singleton
+process-wide, and leaving it mocked leaks into any other test class in
+the same suite run) rather than fighting the same native-load
+constraint a second time.
+
+### Testing on Android Auto
+
+The `carapp/` classes (`DESIGN.md` section 11) render on a real Android
+Auto host, not just under Robolectric — verify end-to-end behavior with
+the **Desktop Head Unit (DHU)**, Google's Android Auto
+(phone-projection) simulator. This targets phone-projected Android
+Auto specifically, not Android Automotive OS — the Studio "Automotive"
+system image/AVD is for that other, car-native target and won't run
+this app's `CarAppService` at all.
+
+```sh
+# Install once, via Android Studio's SDK Manager:
+#   SDK Manager → SDK Tools → "Android Auto Desktop Head Unit emulator"
+adb forward tcp:5277 tcp:5277
+desktop-head-unit
+```
+
+Requires a connected device/emulator with the Android Auto app
+installed and its "head unit server"/developer mode enabled (Android
+Auto app → Settings → tap the version number to unlock developer
+settings → "Start head unit server"). A debug build's `HostValidator`
+is permissive (`ALLOW_ALL_HOSTS_VALIDATOR`), so no extra host
+allowlisting is needed for local DHU testing.

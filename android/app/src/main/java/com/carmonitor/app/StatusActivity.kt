@@ -1,7 +1,6 @@
 package com.carmonitor.app
 
 import android.Manifest
-import android.bluetooth.BluetoothManager
 import android.content.ClipboardManager
 import android.content.ComponentName
 import android.content.Context
@@ -13,7 +12,6 @@ import android.os.Build
 import android.os.Bundle
 import android.os.IBinder
 import android.os.PowerManager
-import android.os.Process
 import android.provider.Settings
 import android.widget.Button
 import android.widget.TextView
@@ -184,12 +182,12 @@ class StatusActivity : AppCompatActivity(), ObdForegroundService.StatusListener 
             }
         }
 
-        stoppedByUser = loadStoppedByUser()
+        stoppedByUser = MonitoringPrefs.isStoppedByUser(this)
         if (stoppedByUser) {
             statusText.text = getString(R.string.status_stopped)
             stopButton.text = getString(R.string.start_scanning_button)
         } else {
-            requestPermissions.launch(requiredPermissions())
+            requestPermissions.launch(BluetoothPermissions.forServiceStart())
         }
     }
 
@@ -280,7 +278,7 @@ class StatusActivity : AppCompatActivity(), ObdForegroundService.StatusListener 
             isBound = false
         }
         stoppedByUser = true
-        saveStoppedByUser(true)
+        MonitoringPrefs.setStoppedByUser(this, true)
         statusText.text = message
         stopButton.text = getString(R.string.start_scanning_button)
     }
@@ -288,45 +286,19 @@ class StatusActivity : AppCompatActivity(), ObdForegroundService.StatusListener 
     /** The explicit-human-input counterpart to applyStoppedUi() — undoes it. */
     private fun startScanning() {
         stoppedByUser = false
-        saveStoppedByUser(false)
+        MonitoringPrefs.setStoppedByUser(this, false)
         stopButton.text = getString(R.string.stop_button)
         statusText.text = getString(R.string.status_connecting)
-        requestPermissions.launch(requiredPermissions())
+        requestPermissions.launch(BluetoothPermissions.forServiceStart())
         isBound = bindService(Intent(this, ObdForegroundService::class.java), serviceConnection, Context.BIND_AUTO_CREATE)
     }
 
     private fun quitApp() {
-        // Quitting counts as an explicit stop too — reopening the app
-        // afterward should require "Start Scanning" like any other stop,
-        // not silently resume just because the process happens to be gone.
-        saveStoppedByUser(true)
-        // Best-effort: ask the service to tear its connection down first
-        // (see ObdForegroundService.stopServiceImmediately()) before the
-        // hard process kill below, which takes the service down anyway —
-        // same process, no multi-process manifest config.
-        ObdForegroundService.quit(this)
-        Process.killProcess(Process.myPid())
-    }
-
-    private fun loadStoppedByUser(): Boolean =
-        getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).getBoolean(PREF_STOPPED_BY_USER, false)
-
-    private fun saveStoppedByUser(value: Boolean) {
-        getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            .edit()
-            .putBoolean(PREF_STOPPED_BY_USER, value)
-            .apply()
+        AppQuit.quit(this)
     }
 
     private fun formatValue(value: Double): String =
         if (value == value.toLong().toDouble()) value.toLong().toString() else "%.1f".format(value)
-
-    private fun requiredPermissions(): Array<String> = buildList {
-        addAll(BluetoothPermissions.forConnect())
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            add(Manifest.permission.POST_NOTIFICATIONS)
-        }
-    }.toTypedArray()
 
     private fun updateBatteryOptimizationButtonVisibility() {
         val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
@@ -460,66 +432,33 @@ class StatusActivity : AppCompatActivity(), ObdForegroundService.StatusListener 
             requestPermissions.launch(BluetoothPermissions.forConnect())
             return
         }
-        val adapter = (getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager).adapter
-        val bonded = try {
-            adapter?.bondedDevices
-                ?.filter { device ->
-                    val name = try { device.name } catch (e: SecurityException) { null }
-                    DeviceNameFilter.looksLikeObd2Scanner(name) || RememberedDevices.isRemembered(this, device.address)
-                }
-                ?: emptyList()
-        } catch (e: SecurityException) {
-            Mobile.logError("Failed to list bonded devices: $e")
-            emptyList()
-        }
-        if (bonded.isEmpty()) {
+        val isConnected = latestConnectionState is ObdForegroundService.ConnectionState.Connected
+        val candidates = ObdDeviceLister.listCandidates(this, filesDir, isConnected)
+        if (candidates.isEmpty()) {
             Toast.makeText(this, getString(R.string.paired_devices_none), Toast.LENGTH_SHORT).show()
             return
         }
 
-        val selectedMac = Mobile.deviceMAC(filesDir.absolutePath)
-        val isConnected = latestConnectionState is ObdForegroundService.ConnectionState.Connected
-        val labels = bonded.map { device ->
-            val name = try { device.name } catch (e: SecurityException) { null } ?: device.address
-            val status = when {
-                device.address.equals(selectedMac, ignoreCase = true) && isConnected -> getString(R.string.device_status_connected)
-                device.address.equals(selectedMac, ignoreCase = true) -> getString(R.string.device_status_selected)
-                else -> getString(R.string.device_status_paired)
-            }
-            "$name (${device.address}) — $status"
-        }.toTypedArray()
+        val labels = candidates.map { "${it.name} (${it.mac}) — ${it.status}" }.toTypedArray()
 
         AlertDialog.Builder(this)
             .setTitle(getString(R.string.paired_devices_dialog_title))
             .setItems(labels) { _, which ->
-                val device = bonded[which]
-                val name = try { device.name } catch (e: SecurityException) { null } ?: device.address
-                selectDevice(device.address, name)
+                val candidate = candidates[which]
+                selectDevice(candidate.mac, candidate.name)
             }
             .setNegativeButton(android.R.string.cancel, null)
             .show()
     }
 
     private fun selectDevice(mac: String, name: String) {
-        RememberedDevices.remember(this, mac)
-        scope.launch(Dispatchers.IO) {
+        scope.launch {
             try {
-                Mobile.setSelectedDevice(filesDir.absolutePath, mac, name)
-                runOnUiThread {
-                    boundService?.reconnectNow()
-                    Toast.makeText(this@StatusActivity, getString(R.string.device_selected, name), Toast.LENGTH_SHORT).show()
-                }
+                ObdDeviceLister.select(this@StatusActivity, filesDir, mac, name) { boundService?.reconnectNow() }
+                Toast.makeText(this@StatusActivity, getString(R.string.device_selected, name), Toast.LENGTH_SHORT).show()
             } catch (e: Exception) {
-                Mobile.logError("Failed to select device: $e")
-                runOnUiThread {
-                    Toast.makeText(this@StatusActivity, getString(R.string.device_select_failed), Toast.LENGTH_SHORT).show()
-                }
+                Toast.makeText(this@StatusActivity, getString(R.string.device_select_failed), Toast.LENGTH_SHORT).show()
             }
         }
-    }
-
-    companion object {
-        private const val PREFS_NAME = "car_monitor_prefs"
-        private const val PREF_STOPPED_BY_USER = "stoppedByUser"
     }
 }
