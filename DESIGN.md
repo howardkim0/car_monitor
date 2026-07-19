@@ -667,7 +667,11 @@ reasoning and alternatives considered.
 `androidx.car.app.category.IOT` — a connected-device monitor, not
 navigation/parking/charging, alongside a `com.google.android.gms.car.application`
 meta-data entry pointing at `res/xml/automotive_app_desc.xml`, the
-Car App Library's own manifest-discovery mechanism) creates a
+Car App Library's own manifest-discovery mechanism, and an
+`androidx.car.app.minCarApiLevel` meta-data entry the library requires
+at the `<application>` level — without it, `CarAppService.getAppInfo()`
+throws and every screen render fails on a real host; see
+`docs/defects.md`) creates a
 `CarMonitorSession`, whose `onCreateScreen()` returns the root
 `MainCarScreen`. `HostValidator` is permissive in debug builds
 (`ALLOW_ALL_HOSTS_VALIDATOR`, so a DHU-connected dev build works with no

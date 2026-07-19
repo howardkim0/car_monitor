@@ -298,3 +298,28 @@ signatures and Android refused the in-place update (only a full
 uninstall/reinstall worked). Fix: a persistent signing key, stored as
 GitHub repo secrets and decoded to a runner-temp path at build time,
 never committed. See `docs/dev-setup.md`'s "Signing" subsection.
+
+## Android Auto
+
+**Every screen crashed on a real Android Auto host with "Car Monitor
+has encountered an unexpected error"**, verified end-to-end for the
+first time against the Desktop Head Unit (see `docs/dev-setup.md`'s
+"Testing on Android Auto") once DHU could actually reach a phone (see
+that doc's DHU setup gotchas). `adb logcat` showed the real cause:
+`CarApp.H.Tem: Error: ... java.lang.IllegalArgumentException: Min API
+level not declared in manifest (androidx.car.app.minCarApiLevel)`, from
+`AppInfo.retrieveMinCarAppApiLevel` via `CarAppService.getAppInfo()`.
+`AndroidManifest.xml` had the Car App Library's discovery meta-data
+(`com.google.android.gms.car.application`) but never added the
+separate `androidx.car.app.minCarApiLevel` meta-data the library also
+requires at the `<application>` level — nothing in Robolectric's
+`ScreenController`/`TestCarContext` harness exercises
+`CarAppService.getAppInfo()` (existing tests call
+`Screen.onGetTemplate()` directly, per `DESIGN.md` section 11's
+"Testing note"), so this shipped invisibly until a real host tried to
+negotiate API levels. Fix: add `<meta-data
+android:name="androidx.car.app.minCarApiLevel" android:value="1" />`
+next to the existing car-application meta-data. Regression test:
+`CarMonitorCarAppServiceTest` asserts the manifest's parsed
+`ApplicationInfo.metaData` contains that key — Robolectric parses the
+real manifest, so this catches the gap without needing a real host.
