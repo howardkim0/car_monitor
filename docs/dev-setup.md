@@ -148,8 +148,11 @@ system image/AVD is for that other, car-native target and won't run
 this app's `CarAppService` at all.
 
 ```sh
-# Install once, via Android Studio's SDK Manager:
-#   SDK Manager → SDK Tools → "Android Auto Desktop Head Unit emulator"
+# Install once, either via Android Studio's SDK Manager
+# (SDK Manager → SDK Tools → "Android Auto Desktop Head Unit emulator")
+# or the command line:
+sdkmanager "extras;google;auto"   # → $ANDROID_HOME/extras/google/auto/desktop-head-unit
+
 adb forward tcp:5277 tcp:5277
 desktop-head-unit
 ```
@@ -160,3 +163,56 @@ Auto app → Settings → tap the version number to unlock developer
 settings → "Start head unit server"). A debug build's `HostValidator`
 is permissive (`ALLOW_ALL_HOSTS_VALIDATOR`), so no extra host
 allowlisting is needed for local DHU testing.
+
+**Known gotchas getting DHU actually running (Linux):**
+
+- **Missing `libc++.so.1`/`libc++abi.so.1`.** The prebuilt
+  `desktop-head-unit` binary needs the host (not Android-target) build
+  of libc++, which isn't a system package on a fresh box but *is*
+  already bundled with the NDK the setup script installs:
+  ```sh
+  export LD_LIBRARY_PATH="$ANDROID_HOME/ndk/<version>/toolchains/llvm/prebuilt/linux-x86_64/lib/x86_64-unknown-linux-gnu:$ANDROID_HOME/extras/google/auto"
+  ```
+- **Needs `DISPLAY` set.** Fails with `SDL_CreateWindowRenderer failed`
+  if `DISPLAY` isn't exported to match a running X server.
+- **Reads stdin as an interactive command loop.** If stdin isn't a real
+  terminal (e.g. launched from a script or backgrounded non-interactively),
+  it hits EOF immediately and treats that as "quit" — exits instantly
+  with code 0 and no error, easy to mistake for a connection failure.
+  Keep stdin open on a FIFO in that situation:
+  ```sh
+  mkfifo dhu_stdin.fifo && exec 3<>dhu_stdin.fifo
+  desktop-head-unit <&3 &
+  ```
+- **"Start head unit server" toggling on doesn't guarantee it's
+  listening.** A first connection attempt can get `Connection refused`
+  on port 5277 (visible in `adb logcat` as `adbd: failed to connect to
+  socket 'tcp:5277'`) even though the developer-settings toggle looks
+  enabled. Toggling it off and back on immediately before connecting
+  fixes this.
+- **A physically connected USB cable competes with DHU.** The phone's
+  Android Auto app auto-detects the USB data connection itself and
+  attempts a *separate*, real AOAP projection handoff over that cable,
+  which times out after ~5s against a dev machine (`adb logcat` shows
+  `GH.ConnLoggerV2` events ending in `FRAMER_READ_END_OF_STREAM_NO_DATA`
+  → `USB_ISSUE_PROJECTION_NOT_STARTED`). This doesn't block DHU's own
+  TCP-over-adb session, but it's confusing log noise — prefer wireless
+  adb (below) so the cable isn't plugged in at all during a DHU session.
+
+**Wireless adb**, so DHU testing doesn't need a cable connected:
+
+```sh
+# On the phone: Settings → Developer options → Wireless debugging →
+# "Pair device with pairing code" shows an IP:port + 6-digit code.
+adb pair <pairing-ip>:<pairing-port> <code>
+
+# Then use the *main* Wireless debugging screen's IP:port (different
+# from the pairing screen's) to connect:
+adb connect <ip>:<port>
+```
+
+`adb forward` is per-transport, so target the wireless connection
+explicitly if a USB session was ever forwarded too:
+```sh
+adb -s <ip>:<port> forward tcp:5277 tcp:5277
+```

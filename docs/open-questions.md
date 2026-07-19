@@ -81,13 +81,3 @@ both together per `CLAUDE.md`.
   distraction guidelines; discovery/pairing UI can't be hosted by a
   `Screen` anyway), but worth revisiting if bonded-only proves too
   limiting in practice. — [#14](../../../issues/14)
-- **Android Auto support is unverified against a real head unit or the
-  Desktop Head Unit (DHU)** — this dev environment has no way to run
-  DHU or a physical head unit, so `carapp/`'s classes are verified only
-  via Robolectric + `androidx.car.app:app-testing` (`docs/dev-setup.md`
-  documents known gaps in that harness — `ScreenController`'s template
-  tracking and `ScreenManager.pop()` didn't work reliably, so tests
-  dispatch clicks directly instead of through the full lifecycle).
-  Same category of gap as `obd2.InitCommands()` (#4) and
-  `COMMAND_INTERVAL_MS` (#7) being unverified against real hardware. —
-  [#15](../../../issues/15)
