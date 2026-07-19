@@ -33,7 +33,10 @@ without restructuring the app.
 - In-app Bluetooth device pairing/selection, no rebuild.
 
 **Non-goals (v1)**
-- No cloud sync, remote telemetry, or multi-device fleet management.
+- No real-time telemetry streaming or multi-device fleet management.
+  (Periodic log backup to git or to a user-chosen folder — section 7 —
+  is in scope; this non-goal is about live/fleet-facing cloud features,
+  not durable retention of the app's own logs.)
 - No non-ELM327 protocols (e.g. proprietary CAN dongles).
 - No iOS.
 
@@ -56,9 +59,10 @@ The split:
   (a two-line "Copy SSH Public Key" next to a one-line "Quit App") to
   stay aligned in columns. Most of them are grouped behind two
   collapsible toggles to keep the always-visible list short: "Logs"
-  expands to export logs / view app logs / git push, and "Settings"
-  expands to pair/show Bluetooth devices, copy SSH public key, and test
-  alert; tapping either toggle again collapses its group. Battery-
+  expands to export logs / view app logs / git push / back up to a
+  Drive folder, and "Settings" expands to pair/show Bluetooth devices,
+  copy SSH public key, and test alert; tapping either toggle again
+  collapses its group. Battery-
   optimization exemption, stop/start scanning, and quit stay outside
   both groups, always visible. The whole screen is wrapped in a
   `ScrollView` — with this many buttons, an unscrollable layout
@@ -67,8 +71,9 @@ The split:
 
 Go owns all interesting logic and tests; Kotlin is deliberately dumb I/O
 plumbing plus Android ceremony. Framework-only concerns — zipping logs
-for the share sheet (`LogExporter`), Bluetooth discovery UI — stay
-Kotlin-only rather than round-tripping through Go.
+for the share sheet (`LogExporter`), copying readings to a user-chosen
+Storage Access Framework folder (`DriveBackup`, section 7), Bluetooth
+discovery UI — stay Kotlin-only rather than round-tripping through Go.
 
 ## 4. Architecture
 
@@ -561,6 +566,35 @@ register it as a GitHub deploy key without `adb`.
   accepting an unverified one. See `docs/defects.md` for the two-stage
   SSH handshake failure that led to pinning both the key and its
   algorithm.
+- **Drive backup loop** is a second, independent backup destination,
+  alongside (not instead of) the git backup loop above — added because
+  git-backup's remote is hardcoded to the developer's own GitHub repo,
+  meaningless for anyone else running this app. A "Backup to Google
+  Drive" button (in the "Logs" group) opens Android's Storage Access
+  Framework folder picker (`ACTION_OPEN_DOCUMENT_TREE`) — since SAF
+  surfaces every storage provider installed on the device ("This
+  device," Google Drive if signed in, any other cloud app exposing a
+  `DocumentsProvider`), this needs no Google Sign-In SDK, OAuth flow, or
+  Drive API credentials; the app just holds a persisted folder `Uri`
+  (`contentResolver.takePersistableUriPermission`, saved via
+  `DriveBackupPrefs`) and writes to it the same way regardless of what
+  backs it. Entirely Kotlin (`DriveBackup`), no `go/` involvement — see
+  section 3's Kotlin-only framework-concerns note. Runs on the same
+  independent-of-Bluetooth, `onCreate()`-started coroutine-scope pattern
+  as the git backup loop, on the same 5-minute cadence
+  (`GIT_BACKUP_CHECK_INTERVAL_MS`), and is a no-op until a folder is
+  configured. Copies only `readings-*.csv` files — never `app.log`/
+  `app.log.1` — into the chosen folder: any file not already present
+  there, plus the current day's still-growing file every cycle (older,
+  rotated files are immutable once written, so they're copied once and
+  never revisited). This is what makes the loop meaningful as
+  *retention*, not just export — on-device storage prunes to the newest
+  30 `readings-*.csv` files (section 6.1), so backing up before that cap
+  is what actually preserves history past 30 days. Picking a new folder
+  replaces the previous destination outright; there's no separate
+  "unpick" affordance. Grant revocation (Drive app uninstalled,
+  permission revoked in Android settings) is caught and logged, never
+  crashes the service — same best-effort philosophy as git backup above.
 
 ## 8. Permissions
 
