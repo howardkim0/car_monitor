@@ -1,14 +1,19 @@
 package com.carmonitor.app.carapp
 
-import androidx.car.app.model.ItemList
+import android.bluetooth.BluetoothAdapter
+import android.bluetooth.BluetoothDevice
 import androidx.car.app.model.ListTemplate
 import androidx.car.app.model.Row
 import androidx.car.app.testing.TestCarContext
+import com.carmonitor.app.BluetoothPermissions
 import com.carmonitor.app.CandidateDevice
 import com.carmonitor.app.ObdDeviceLister
+import com.carmonitor.app.ObdDeviceScanner
 import com.carmonitor.app.R
 import io.mockk.every
 import io.mockk.mockkObject
+import io.mockk.slot
+import io.mockk.unmockkObject
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -18,6 +23,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
+import org.robolectric.Shadows.shadowOf
 
 @RunWith(RobolectricTestRunner::class)
 class PairScannerScreenTest {
@@ -31,6 +37,7 @@ class PairScannerScreenTest {
         // Mock ObdDeviceLister to avoid JNI call to Mobile.deviceMAC()
         // in a Robolectric test environment (plain JVM with no native libs)
         mockkObject(ObdDeviceLister)
+        mockkObject(ObdDeviceScanner)
     }
 
     @After
@@ -38,8 +45,18 @@ class PairScannerScreenTest {
         // mockkObject() patches the singleton's bytecode process-wide —
         // leaving it mocked after this class's tests finish would leak
         // into any other test class in the same suite run that touches
-        // the real ObdDeviceLister object.
-        io.mockk.unmockkObject(ObdDeviceLister)
+        // the real object.
+        unmockkObject(ObdDeviceLister)
+        unmockkObject(ObdDeviceScanner)
+    }
+
+    // TestCarContext grants nothing by default — carContext.requestPermissions()'s
+    // callback only fires once the (real) system permission flow completes,
+    // which this harness doesn't simulate, so tests that need to observe
+    // behavior past the permission check grant it directly via the shadow
+    // instead, same as a device that already granted it in a prior session.
+    private fun grantScanPermissions() {
+        shadowOf(RuntimeEnvironment.getApplication()).grantPermissions(*BluetoothPermissions.forScan())
     }
 
     @Test
@@ -50,27 +67,18 @@ class PairScannerScreenTest {
     }
 
     @Test
-    fun `renders empty list message when no devices available`() {
-        // Mock listCandidates() to return empty list (the typical case
-        // in Robolectric: no real Bluetooth adapter with bonded devices).
-        // This avoids the JNI UnsatisfiedLinkError from Mobile.deviceMAC()
-        // and lets us test the template rendering directly.
+    fun `always shows a Scan for Devices row first, even with no bonded devices`() {
         every { ObdDeviceLister.listCandidates(any(), any(), any()) } returns emptyList()
 
         screen = PairScannerScreen(testCarContext)
 
         val template = screen.onGetTemplate() as ListTemplate
-        val itemList = template.singleList!!
+        val rows = template.singleList!!.items.map { it as Row }
 
-        // Assert no items are shown
-        assertEquals("Should have 0 items", 0, itemList.items.size)
-
-        // Assert the no-items message is set
-        assertNotNull("Should have a no-items message", itemList.noItemsMessage)
+        assertEquals("Should have only the scan row", 1, rows.size)
         assertEquals(
-            "No-items message should match resource string",
-            testCarContext.getString(R.string.paired_devices_none),
-            itemList.noItemsMessage.toString()
+            testCarContext.getString(R.string.device_scan_button),
+            rows[0].title.toString()
         )
     }
 
@@ -87,31 +95,110 @@ class PairScannerScreenTest {
         screen = PairScannerScreen(testCarContext)
 
         val template = screen.onGetTemplate() as ListTemplate
-        val itemList = template.singleList!!
-        val rows = itemList.items.map { it as Row }
+        val rows = template.singleList!!.items.map { it as Row }
 
-        // Assert correct number of devices
-        assertEquals("Should have 2 devices", 2, rows.size)
+        // Scan row, then the 2 bonded devices
+        assertEquals("Should have the scan row plus 2 devices", 3, rows.size)
 
-        // Assert first device row title
         assertTrue(
-            "First device row should contain device name",
-            rows[0].title.toString().contains("Garage OBDLink")
+            "Second row should contain first device name",
+            rows[1].title.toString().contains("Garage OBDLink")
         )
         assertTrue(
-            "First device row should contain status",
-            rows[0].title.toString().contains("Selected")
+            "Second row should contain status",
+            rows[1].title.toString().contains("Selected")
         )
 
-        // Assert second device row title
         assertTrue(
-            "Second device row should contain device name",
-            rows[1].title.toString().contains("ELM327")
+            "Third row should contain second device name",
+            rows[2].title.toString().contains("ELM327")
         )
         assertTrue(
-            "Second device row should contain status",
-            rows[1].title.toString().contains("Paired")
+            "Third row should contain status",
+            rows[2].title.toString().contains("Paired")
         )
+    }
+
+    @Test
+    fun `tapping Scan for Devices requests permissions then starts discovery`() {
+        grantScanPermissions()
+        every { ObdDeviceLister.listCandidates(any(), any(), any()) } returns emptyList()
+        every { ObdDeviceScanner.isLocationEnabled(any()) } returns true
+        every { ObdDeviceScanner.startDiscovery(any(), any()) } returns null
+
+        screen = PairScannerScreen(testCarContext)
+        val template = screen.onGetTemplate() as ListTemplate
+        val scanRow = template.singleList!!.items.map { it as Row }[0]
+
+        scanRow.onClickDelegate!!.sendClick(object : androidx.car.app.OnDoneCallback {})
+
+        io.mockk.verify { ObdDeviceScanner.startDiscovery(any(), any()) }
+    }
+
+    @Test
+    fun `discovered non-bonded devices appear as rows and can be tapped to pair`() {
+        grantScanPermissions()
+        every { ObdDeviceLister.listCandidates(any(), any(), any()) } returns emptyList()
+        every { ObdDeviceScanner.isLocationEnabled(any()) } returns true
+
+        val listenerSlot = slot<ObdDeviceScanner.Listener>()
+        val fakeReceiver = object : android.content.BroadcastReceiver() {
+            override fun onReceive(context: android.content.Context?, intent: android.content.Intent?) {}
+        }
+        every { ObdDeviceScanner.startDiscovery(any(), capture(listenerSlot)) } returns fakeReceiver
+        every { ObdDeviceScanner.stopDiscovery(any(), any()) } returns Unit
+        every { ObdDeviceScanner.pair(any()) } returns Unit
+
+        screen = PairScannerScreen(testCarContext)
+        val scanRow = (screen.onGetTemplate() as ListTemplate).singleList!!.items.map { it as Row }[0]
+        scanRow.onClickDelegate!!.sendClick(object : androidx.car.app.OnDoneCallback {})
+
+        val device = BluetoothAdapter.getDefaultAdapter().getRemoteDevice("11:22:33:44:55:66")
+        shadowOf(device).setName("ELM327")
+        listenerSlot.captured.onDeviceFound(device)
+
+        val rowsAfterFound = (screen.onGetTemplate() as ListTemplate).singleList!!.items.map { it as Row }
+        assertEquals("scan row + 1 discovered device", 2, rowsAfterFound.size)
+
+        rowsAfterFound[1].onClickDelegate!!.sendClick(object : androidx.car.app.OnDoneCallback {})
+
+        io.mockk.verify { ObdDeviceScanner.pair(device) }
+
+        val rowsWhilePairing = (screen.onGetTemplate() as ListTemplate).singleList!!.items.map { it as Row }
+        assertEquals(
+            testCarContext.getString(R.string.device_scan_pairing),
+            rowsWhilePairing[1].title.toString()
+        )
+    }
+
+    @Test
+    fun `bond state change to BONDED selects the device`() {
+        grantScanPermissions()
+        every { ObdDeviceLister.listCandidates(any(), any(), any()) } returns emptyList()
+        io.mockk.coEvery { ObdDeviceLister.select(any(), any(), any(), any(), any()) } returns Unit
+        every { ObdDeviceScanner.isLocationEnabled(any()) } returns true
+
+        val listenerSlot = slot<ObdDeviceScanner.Listener>()
+        val fakeReceiver = object : android.content.BroadcastReceiver() {
+            override fun onReceive(context: android.content.Context?, intent: android.content.Intent?) {}
+        }
+        every { ObdDeviceScanner.startDiscovery(any(), capture(listenerSlot)) } returns fakeReceiver
+        every { ObdDeviceScanner.stopDiscovery(any(), any()) } returns Unit
+        every { ObdDeviceScanner.pair(any()) } returns Unit
+
+        screen = PairScannerScreen(testCarContext)
+        val scanRow = (screen.onGetTemplate() as ListTemplate).singleList!!.items.map { it as Row }[0]
+        scanRow.onClickDelegate!!.sendClick(object : androidx.car.app.OnDoneCallback {})
+
+        val device = BluetoothAdapter.getDefaultAdapter().getRemoteDevice("11:22:33:44:55:66")
+        shadowOf(device).setName("ELM327")
+        listenerSlot.captured.onDeviceFound(device)
+        (screen.onGetTemplate() as ListTemplate).singleList!!.items.map { it as Row }[1]
+            .onClickDelegate!!.sendClick(object : androidx.car.app.OnDoneCallback {})
+
+        listenerSlot.captured.onBondStateChanged(device, BluetoothDevice.BOND_BONDED)
+
+        io.mockk.coVerify { ObdDeviceLister.select(any(), any(), device.address, any(), any()) }
     }
 
     @Test
@@ -137,7 +224,7 @@ class PairScannerScreenTest {
         // (Desktop Head Unit) for Android Auto.
         //
         // Un-mock ObdDeviceLister to test the real (failing) path:
-        io.mockk.unmockkObject(ObdDeviceLister)
+        unmockkObject(ObdDeviceLister)
 
         screen = PairScannerScreen(testCarContext)
 

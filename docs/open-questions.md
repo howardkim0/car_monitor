@@ -76,8 +76,10 @@ both together per `CLAUDE.md`.
   this whenever that dependency version bumps, and confirm on a real
   signed build (not just the always-permissive debug path) before any
   release. — [#13](../../../issues/13)
-- **Pair Scanner on the car screen is bonded-devices-only, not full
-  discovery** (`DESIGN.md` section 11) — deliberate for v1 (driver
-  distraction guidelines; discovery/pairing UI can't be hosted by a
-  `Screen` anyway), but worth revisiting if bonded-only proves too
-  limiting in practice. — [#14](../../../issues/14)
+- **`DeviceScanActivity` doesn't use the shared `ObdDeviceScanner`
+  engine.** `PairScannerScreen` (`DESIGN.md` section 11) uses it for
+  car-screen discovery/pairing, but `DeviceScanActivity` keeps its own
+  original inline implementation — deliberate, to avoid regression risk
+  to working, tested code when adding the car-screen feature. Unifying
+  the two is a reasonable cleanup (one implementation instead of two
+  that can drift), not required. — [#16](../../../issues/16)

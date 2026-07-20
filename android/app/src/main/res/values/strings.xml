@@ -71,6 +71,7 @@
     <string name="device_scan_show_more_button">Show More (remove OBD2 name filter)</string>
     <string name="device_scan_pairing">Pairing…</string>
     <string name="device_pairing_failed">Pairing failed</string>
+    <string name="device_pairing_timed_out">Pairing timed out — try from the phone</string>
     <string name="device_selected">%1$s selected</string>
     <string name="device_select_failed">Failed to select device — check app log</string>
     <string name="paired_devices_dialog_title">Paired Scanners</string>
