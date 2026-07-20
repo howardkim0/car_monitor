@@ -41,6 +41,7 @@ Notes:
 ```sh
 # 1. Build the Go core into an Android AAR
 cd go/mobile
+export CGO_LDFLAGS="-Wl,-z,max-page-size=16384"
 gomobile bind -androidapi 26 -o ../../android/app/libs/mobile.aar -target=android ./...
 
 # 2. Build the Android app
@@ -61,6 +62,17 @@ whenever a change touches `android/` or `mobile`'s exported surface.
 `gomobile bind` defaults to API 16, which NDK 26 no longer supports —
 the bind step fails immediately with "unsupported API version 16 (not
 in 21..34)".
+
+`CGO_LDFLAGS="-Wl,-z,max-page-size=16384"` forces `libgojni.so`'s ELF
+`LOAD` segments onto 16KB boundaries — the pinned NDK (26.1.10909125)
+predates NDK r27's switch to 16KB alignment by default, so without this
+flag every ABI's `.so` links at the legacy 4KB page size. This matters
+for real ARM64 hardware moving to a 16KB kernel page size (Google Play
+requires 16KB-aligned native libraries for apps targeting newer API
+levels) — without it, `libgojni.so` either fails to load or triggers an
+alignment warning at install time (`LOAD segment not aligned`). Verify
+with `readelf -lW <path-to-libgojni.so> | grep LOAD` — the last column
+should read `0x4000`, not `0x1000`. See `docs/defects.md`.
 
 Measured with the SDK/NDK/`gomobile` already installed: `gomobile bind`
 ~10s; `gradlew assembleDebug` ~1.5min on a clean checkout, ~10s warm.

@@ -98,6 +98,8 @@ jobs:
 
       - name: Build mobile.aar
         working-directory: go/mobile
+        env:
+          CGO_LDFLAGS: "-Wl,-z,max-page-size=16384"
         run: gomobile bind -androidapi 26 -o ../../android/app/libs/mobile.aar -target=android ./...
 
       - name: Run unit tests

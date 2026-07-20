@@ -299,6 +299,25 @@ uninstall/reinstall worked). Fix: a persistent signing key, stored as
 GitHub repo secrets and decoded to a runner-temp path at build time,
 never committed. See `docs/dev-setup.md`'s "Signing" subsection.
 
+**`libgojni.so` wasn't 16KB-page aligned**, surfaced as an install-time
+warning ("LOAD segment not aligned") on a real device rather than a
+crash — noticed while installing a build for Drive-backup verification
+(see the Android Auto section above for the DHU-testing context this
+followed). `readelf -lW libgojni.so` showed every `LOAD` segment's
+alignment column as `0x1000` (4KB) across all four ABIs. Root cause:
+the pinned NDK (26.1.10909125, `docs/dev-setup.md`) predates NDK r27's
+switch to defaulting `ld`'s max page size to 16KB — Android is moving
+toward requiring 16KB-aligned native libraries on ARM64 hardware, and
+without this, `gomobile bind`'s cgo-linked output keeps the legacy 4KB
+default regardless of target API level. Fix: `CGO_LDFLAGS="-Wl,-z,max-page-size=16384"`
+set before every `gomobile bind` invocation — local dev steps
+(`docs/dev-setup.md`) and both CI workflows that build `mobile.aar`
+(`coverage.yml`, `release-apk.yml`) now set it. Verified with
+`readelf -lW <path> | grep LOAD` showing `0x4000` on all four ABIs,
+surviving Gradle's `stripDebugDebugSymbols` step, confirmed on a real
+device with no alignment warning at install time. A future NDK bump to
+r27+ would make this flag redundant but isn't required for the fix.
+
 ## Android Auto
 
 **Every screen crashed on a real Android Auto host with "Car Monitor

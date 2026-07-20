@@ -16,6 +16,31 @@ For the full architecture, extensibility points, and design rationale, see
 
 <img src="docs/screenshots/status-screen.jpg" alt="Car Monitor status screen: connection state, then Export Logs, Copy SSH Public Key, Start Scanning, and Quit App as a full-width vertical button stack" width="300">
 
+## Features
+
+- **Background monitoring** via a foreground service — keeps polling and
+  logging with the screen off, reconnects automatically on Bluetooth
+  drops.
+- **Trend-based anomaly detection** — notifies when logged data suggests
+  a developing problem (see examples above).
+- **Android Auto** — a car-screen surface (phone projection, not Android
+  Automotive OS) mirrors the status screen's core actions: start
+  scanning, pair a scanner, view logs, quit. See [DESIGN.md
+  §11](DESIGN.md#11-android-auto).
+- **Log export** — zip and share reading logs + app logs via Android's
+  share sheet (the "Export Logs" button), a one-off manual export,
+  independent of the automatic backups below.
+- **Two independent, automatic log backup paths**, since on-device
+  storage prunes to the 30 most recent reading logs (by count, not
+  age — see [DESIGN.md §6.1](DESIGN.md#6-storage)) and ongoing backup is
+  what actually preserves history beyond that:
+  - **Git backup** — built for this project's own developer workflow.
+  - **Google Drive backup** — pick a folder once, no GitHub/SSH
+    knowledge needed; built for non-technical users. See [DESIGN.md
+    §7](DESIGN.md#7-background-execution-model) and
+    [docs/plan-google-drive-backup.md](docs/plan-google-drive-backup.md)
+    for how each works.
+
 ## Install
 
 The simplest way to try it: grab the latest debug-signed APK, built from
@@ -37,7 +62,7 @@ page](../../releases) directly and install it on-device. See
 ./scripts/setup_ubuntu.sh
 
 # Build the Go core into an Android AAR, then the app
-cd go/mobile && gomobile bind -androidapi 26 -o ../../android/app/libs/mobile.aar -target=android ./...
+cd go/mobile && CGO_LDFLAGS="-Wl,-z,max-page-size=16384" gomobile bind -androidapi 26 -o ../../android/app/libs/mobile.aar -target=android ./...
 cd ../../android && ./gradlew assembleDebug
 
 # Install on a connected device
@@ -59,7 +84,8 @@ prompted, or background monitoring will be killed by Android after a while.
   storage, trend detection, git backup, SSH keys), a plain Go module with a
   100%-enforced test coverage floor.
 - `android/` — the Kotlin shell: Bluetooth I/O, the foreground service,
-  permissions, and the single status screen.
+  permissions, the status screen, the Android Auto car screen
+  (`carapp/`), and Drive backup.
 - `docs/` — local build/test setup (`dev-setup.md`), a log of past bugs
   (`defects.md`), tracked future work (`open-questions.md`),
   implementation plans for non-trivial features (`plan-*.md`),

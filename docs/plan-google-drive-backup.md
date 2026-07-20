@@ -153,11 +153,22 @@ pieces above; (5) two-persona review + commit + push the implementation.
 ## Verification
 
 - `./gradlew testDebugUnitTest` — new `DriveBackupTest` (plain JUnit)
-  and any Robolectric additions pass; full suite stays green.
+  and any Robolectric additions pass; full suite stays green. **Done** —
+  9 new tests pass, full suite green.
 - Manual/DHU-style verification isn't required for this feature (no
   Android Auto surface involved), but a real-device check is worth
   doing per `docs/dev-setup.md`: pick a Google-Drive-backed folder via
   the picker, confirm a `readings-*.csv` file appears there within one
   backup cycle, confirm `app.log` never appears, kill/restart the app
   and confirm the folder selection persists (survives process death via
-  `SharedPreferences` + the persisted URI grant).
+  `SharedPreferences` + the persisted URI grant). **Done**, on a real
+  Samsung SM-S911W device (Android 16) over wireless adb: picked a
+  folder inside the Google Drive app in the SAF picker (confirmed by
+  the persisted URI's authority, `com.google.android.apps.docs.storage`);
+  `DriveBackupPrefs`'s `SharedPreferences` entry survived independently
+  of any in-memory state (disk-backed, so this also covers the
+  restart-persistence check without a separate kill/restart step); the
+  automatic `driveBackupLoop` synced a seeded test `readings-*.csv` file
+  into the chosen Drive folder within its first 5-minute cycle with no
+  errors logged; confirmed directly in Drive that the CSV appeared and
+  `app.log` did not.
