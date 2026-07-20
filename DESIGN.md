@@ -737,17 +737,38 @@ reasoning. `QuitConfirmationScreen` (`MessageTemplate`) has a primary
 "Quit" action (same `#3A3A3A` tint) that calls `AppQuit.quit()`, and a
 "Cancel" action that pops back.
 
-**`PairScannerScreen`** lists already-*bonded* devices only, not
-`DeviceScanActivity`'s full BLE discovery/pairing flow — a multi-step,
-attention-heavy flow that both fights Android's Driver Distraction
-Guidelines for in-car UI and can't be hosted by a `Screen` anyway
-(Screens can't launch arbitrary phone `Activity`s). Good enough to
-switch dongles mid-trip without exposing discovery behind the wheel.
-Always labels devices as `isConnected = false` (never "Connected," only
-ever "Selected" or "Paired") — unlike `StatusActivity`, this screen has
-no `StatusListener` wired to `ObdForegroundService`, so it can't
-actually tell whether the selected device is live. Display-only; worth
-revisiting if that distinction matters in practice.
+**`PairScannerScreen`** lists already-bonded devices, plus a "Scan for
+Devices" row that discovers and pairs *non*-bonded ones — unlike
+`LogsScreen`'s Refresh action below, this one is deliberately **not**
+gated behind `ParkedOnlyOnClickListener`, even though it's arguably the
+more attention-heavy of the two flows. A `Screen` genuinely can't
+launch an arbitrary phone `Activity` (so `DeviceScanActivity` itself
+can't be hosted here), but that only rules out *reusing the Activity* —
+discovery itself isn't otherwise restricted by the Car App Library, and
+is built natively here with `ListTemplate`'s `setLoading()` +
+`invalidate()` (the same refresh mechanism `LogsScreen` below uses).
+The real remaining risk is narrower than "can't be done at all": if a
+discovered device needs an interactive pairing confirmation,
+`createBond()`'s system dialog renders on the *phone*, not the car
+display, so a driver who can't glance at their phone could get stuck
+mid-pairing. Accepted as a reasonable trade-off for this app's target
+hardware — headless OBD2 dongles, which `DeviceScanActivity` already
+pairs today via plain `createBond()` with no PIN-entry UI of its own —
+backstopped by an explicit pairing timeout (car `Screen`'s own
+`lifecycleScope`) rather than a silent hang: past it, the row resets
+with a "try from the phone" message instead of waiting forever.
+`ObdDeviceScanner` (new, alongside `ObdDeviceLister` below) is the
+`Context`-parameterized discovery/pairing engine both an `Activity` and
+a `CarContext` can drive identically — `DeviceScanActivity` doesn't use
+it yet (its existing inline implementation is untouched, deliberately,
+to avoid regression risk to working, tested code for a change this
+feature doesn't require), but it's shaped so that unification is a
+later, optional cleanup rather than a rewrite. Always labels devices as
+`isConnected = false` (never "Connected," only ever "Selected" or
+"Paired") — unlike `StatusActivity`, this screen has no `StatusListener`
+wired to `ObdForegroundService`, so it can't actually tell whether the
+selected device is live. Display-only; worth revisiting if that
+distinction matters in practice.
 
 **`LogsScreen`** shows roughly the last 15 lines of `app.log` (via the
 existing `LogViewer.readTail()`, with a much smaller `maxBytes` than the
