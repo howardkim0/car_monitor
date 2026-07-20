@@ -36,6 +36,7 @@ import mobile.AnomalyListener
 import mobile.Mobile
 import mobile.ReadingListener
 import mobile.Session
+import java.io.File
 import java.io.IOException
 import java.util.UUID
 import java.util.concurrent.CopyOnWriteArrayList
@@ -101,6 +102,7 @@ class ObdForegroundService : Service() {
         // dropping any logging from an Activity used in that state. See
         // docs/defects.md.
         scope.launch { gitBackupLoop() }
+        scope.launch { driveBackupLoop() }
         createNotificationChannel()
         createAnomalyNotificationChannel()
         startForeground(NOTIFICATION_ID, buildNotification(latestState))
@@ -393,6 +395,21 @@ class ObdForegroundService : Service() {
             delay(GIT_BACKUP_CHECK_INTERVAL_MS)
             runCatching { Mobile.syncLogsIfNeeded(filesDir.absolutePath) }
                 .onFailure { Log.w(TAG, "git backup check failed", it) }
+        }
+    }
+
+    /**
+     * A no-op until a folder is configured (DriveBackupPrefs.getFolderUri()
+     * returns null) — see DESIGN.md section 7. Reuses gitBackupLoop's
+     * cadence rather than introducing a second interval constant; there's
+     * no reason for these to diverge yet.
+     */
+    private suspend fun driveBackupLoop() {
+        while (currentCoroutineContext().isActive) {
+            delay(GIT_BACKUP_CHECK_INTERVAL_MS)
+            val folderUri = DriveBackupPrefs.getFolderUri(this@ObdForegroundService) ?: continue
+            runCatching { DriveBackup.sync(this@ObdForegroundService, File(filesDir, "readings"), folderUri) }
+                .onFailure { Log.w(TAG, "Drive backup check failed", it) }
         }
     }
 

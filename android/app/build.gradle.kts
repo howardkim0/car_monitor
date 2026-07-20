@@ -119,6 +119,7 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.0")
     implementation("androidx.car.app:app:1.7.0")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.6.2")
+    implementation("androidx.documentfile:documentfile:1.0.1")
 
     // See DESIGN.md section 10 and docs/dev-setup.md's "Testing tooling":
     // Robolectric (Android framework on the plain JVM, no emulator/device

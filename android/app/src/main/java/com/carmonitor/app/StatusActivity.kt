@@ -52,6 +52,7 @@ class StatusActivity : AppCompatActivity(), ObdForegroundService.StatusListener 
     private lateinit var copySshKeyButton: Button
     private lateinit var testAlertButton: Button
     private lateinit var gitPushButton: Button
+    private lateinit var backupToDriveButton: Button
     private lateinit var settingsButton: Button
     private lateinit var settingsGroup: android.view.View
     private lateinit var pairDevicesButton: Button
@@ -116,6 +117,10 @@ class StatusActivity : AppCompatActivity(), ObdForegroundService.StatusListener 
         }
     }
 
+    private val driveFolderPicker = registerForActivityResult(
+        ActivityResultContracts.OpenDocumentTree()
+    ) { uri -> onDriveFolderChosen(uri) }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         // Off the main thread, matching every other Mobile.* call in this
@@ -153,6 +158,8 @@ class StatusActivity : AppCompatActivity(), ObdForegroundService.StatusListener 
         testAlertButton.setOnClickListener { showTestAlert() }
         gitPushButton = findViewById(R.id.gitPushButton)
         gitPushButton.setOnClickListener { gitPush() }
+        backupToDriveButton = findViewById(R.id.backupToDriveButton)
+        backupToDriveButton.setOnClickListener { driveFolderPicker.launch(null) }
         pairDevicesButton = findViewById(R.id.pairDevicesButton)
         pairDevicesButton.setOnClickListener { deviceScanLauncher.launch(Intent(this, DeviceScanActivity::class.java)) }
         showPairedButton = findViewById(R.id.showPairedButton)
@@ -417,6 +424,28 @@ class StatusActivity : AppCompatActivity(), ObdForegroundService.StatusListener 
                     ).show()
                 }
             }
+        }
+    }
+
+    /**
+     * Callback for driveFolderPicker — a null uri means the user backed
+     * out of the picker without choosing anything. Persisting the grant
+     * (not just saving the Uri) is what lets DriveBackup keep writing
+     * there across process death/reboots without re-prompting; see
+     * DESIGN.md section 7.
+     */
+    private fun onDriveFolderChosen(uri: Uri?) {
+        if (uri == null) return
+        try {
+            contentResolver.takePersistableUriPermission(
+                uri,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+            )
+            DriveBackupPrefs.setFolderUri(this, uri.toString())
+            Toast.makeText(this, getString(R.string.backup_to_drive_folder_chosen), Toast.LENGTH_SHORT).show()
+        } catch (e: Exception) {
+            Mobile.logError("Failed to persist Drive backup folder: $e")
+            Toast.makeText(this, getString(R.string.backup_to_drive_folder_failed), Toast.LENGTH_SHORT).show()
         }
     }
 
