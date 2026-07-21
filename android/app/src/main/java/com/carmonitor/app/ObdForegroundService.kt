@@ -16,18 +16,15 @@ import android.os.Binder
 import android.os.Build
 import android.os.IBinder
 import android.os.Process
-import android.os.SystemClock
 import android.util.Log
 import androidx.annotation.VisibleForTesting
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -44,14 +41,19 @@ import java.util.concurrent.CopyOnWriteArrayList
  * Foreground service owning the Bluetooth link to the hardcoded OBD2 dongle.
  * See DESIGN.md sections 4 and 7: this is deliberately dumb I/O plumbing —
  * all protocol framing/decoding lives in Go's Session type; this class only
- * moves bytes in and out of the socket and turns connection state into a
- * notification and callbacks for [StatusActivity]. `Mobile`/`Session` calls
- * go through [ObdMobile]/[ObdSession] (DESIGN.md section 3) rather than the
- * gomobile-bound types directly, so this behavior is testable without a
- * native library loaded — [mobile] defaults to [RealObdMobile] and is only
- * ever swapped for a fake in tests.
+ * opens the Bluetooth socket, handles Android lifecycle/permissions, and
+ * turns connection state into a notification and callbacks for
+ * [StatusActivity]. The actual connect/read/write/backoff loop is owned by
+ * [ObdConnectionEngine] (constructed fresh in [onStartCommand]), which this
+ * class drives as its [ObdConnectionEngine.Callbacks] — that split exists
+ * purely for testability (DESIGN.md section 3/4). `Mobile`/`Session` calls
+ * this class makes directly (`openConnection()`/`buildNotification()`) go
+ * through [ObdMobile]/[ObdSession] rather than the gomobile-bound types
+ * directly, so this behavior is testable without a native library loaded —
+ * [mobile] defaults to [RealObdMobile] and is only ever swapped for a fake
+ * in tests.
  */
-class ObdForegroundService : Service() {
+class ObdForegroundService : Service(), ObdConnectionEngine.Callbacks {
 
     sealed class ConnectionState {
         data object Connecting : ConnectionState()
@@ -71,8 +73,13 @@ class ObdForegroundService : Service() {
         fun getService(): ObdForegroundService = this@ObdForegroundService
     }
 
+    // Public, not internal: openConnection() below implements the public
+    // ObdConnectionEngine.Callbacks interface, and Kotlin requires a
+    // function's return type to be at least as visible as the function
+    // itself (Callbacks' methods can't be `internal` — Kotlin disallows
+    // non-public visibility on interface members).
     @VisibleForTesting
-    internal data class ConnectionHandles(val socket: BluetoothSocket, val session: ObdSession)
+    data class ConnectionHandles(val socket: BluetoothSocket, val session: ObdSession)
 
     private val binder = LocalBinder()
     private val scope = CoroutineScope(Dispatchers.IO + Job())
@@ -83,15 +90,18 @@ class ObdForegroundService : Service() {
     @VisibleForTesting
     internal var mobile: ObdMobile = RealObdMobile
 
+    // The engine actually running connectionLoop() — constructed fresh
+    // alongside connectionJob in onStartCommand(), read by
+    // reconnectNow()/stopServiceImmediately()/onDestroy() to reach the
+    // connection state that now lives on the engine, not this Service.
     // @Volatile: read/written from both this service's own IO-dispatcher
-    // coroutine (connectionLoop() and friends) and the main thread
+    // coroutine (via onStartCommand()) and the main thread
     // (onStartCommand()'s ACTION_STOP/ACTION_QUIT path, which now tears
     // down the connection synchronously instead of only ever doing it via
     // onDestroy() — see stopServiceImmediately()).
     @Volatile
-    private var socket: BluetoothSocket? = null
-    @Volatile
-    private var session: ObdSession? = null
+    @VisibleForTesting
+    internal var activeEngine: ObdConnectionEngine? = null
     @Volatile
     @VisibleForTesting
     internal var connectionJob: Job? = null
@@ -136,20 +146,22 @@ class ObdForegroundService : Service() {
 
         // onStartCommand is always called on the main thread, one call at a
         // time, so checking-and-launching here is inherently race-free —
-        // unlike checking `session == null`, which stays true for the
-        // whole (multi-second) connect() call, so a second start request
-        // arriving mid-connect (e.g. StatusActivity re-requesting
-        // permissions after a screen rotation) would otherwise launch a
-        // second concurrent connectionLoop().
+        // unlike checking whether a connection is already open, which stays
+        // true for the whole (multi-second) connect() call, so a second
+        // start request arriving mid-connect (e.g. StatusActivity
+        // re-requesting permissions after a screen rotation) would
+        // otherwise launch a second concurrent connectionLoop().
         if (connectionJob?.isActive != true) {
-            connectionJob = scope.launch { connectionLoop() }
+            val engine = ObdConnectionEngine(callbacks = this, mobile = mobile)
+            activeEngine = engine
+            connectionJob = scope.launch { engine.connectionLoop() }
         }
         return START_STICKY
     }
 
     override fun onDestroy() {
         scope.cancel()
-        closeConnection()
+        activeEngine?.closeConnectionNow()
         // App log is intentionally not closed here — it must stay open
         // for as long as anything in the process might still log to it
         // (e.g. DeviceScanActivity after tapping Stop), not just while
@@ -177,111 +189,21 @@ class ObdForegroundService : Service() {
      * user next taps Start Scanning.
      */
     fun reconnectNow() {
-        closeConnection()
+        activeEngine?.closeConnectionNow()
     }
+
+    // ObdConnectionEngine.Callbacks — everything the connect/read/write/
+    // backoff loop (ObdConnectionEngine) needs from this Service. See the
+    // class doc comment and DESIGN.md section 4.
+
+    override fun onStateChanged(state: ConnectionState) = updateState(state)
 
     /**
-     * Connect, run the read/write loops until the socket fails, then
-     * reconnect with exponential backoff (capped) per DESIGN.md section 7.
-     * Never lets a real failure escape and kill the service — except that
-     * if NO_CONNECTION_TIMEOUT_MS elapses without ever reaching Connected
-     * (permission wait time counts too), the service stops itself rather
-     * than retrying forever against a dongle that's never going to answer.
-     *
-     * `catch (e: CancellationException) { throw e }` below matters more
-     * than it looks: CancellationException is a plain Exception subtype in
-     * Kotlin, so a bare `catch (e: Exception)` silently swallows a
-     * requested stop and treats it as just another failed attempt to
-     * retry — which is exactly the "tap Stop, it retries anyway" bug this
-     * change fixes. Cancellation must always propagate, never be treated
-     * as a retryable failure.
+     * The no-connection timeout (NO_CONNECTION_TIMEOUT_MS, checked by the
+     * engine) stops the service rather than retrying forever against a
+     * dongle that's never going to answer — see stopServiceImmediately().
      */
-    private suspend fun connectionLoop() {
-        var backoffMs = INITIAL_BACKOFF_MS
-        // elapsedRealtime(), not wall-clock time: immune to the user (or
-        // NTP) changing the system clock mid-wait.
-        var lastConnectedAt = SystemClock.elapsedRealtime()
-
-        while (scope.isActive) {
-            if (!hasBluetoothPermission()) {
-                if (SystemClock.elapsedRealtime() - lastConnectedAt >= NO_CONNECTION_TIMEOUT_MS) {
-                    stopSelfDueToNoConnection()
-                    return
-                }
-                updateState(ConnectionState.PermissionMissing)
-                delay(PERMISSION_POLL_INTERVAL_MS)
-                continue
-            }
-
-            updateState(ConnectionState.Connecting)
-            var permissionMissing = false
-            try {
-                val handles = openConnection()
-
-                if (!scope.isActive) {
-                    // Stop/Quit was requested while connect() — a raw
-                    // blocking call coroutine cancellation cannot
-                    // interrupt — was already in flight. Don't report
-                    // Connected after the user already asked to stop;
-                    // close what we just opened and get out.
-                    try {
-                        handles.session.close()
-                    } catch (e: Exception) {
-                        // Best-effort; the service is stopping regardless.
-                    }
-                    handles.socket.close()
-                    return
-                }
-
-                socket = handles.socket
-                session = handles.session
-                backoffMs = INITIAL_BACKOFF_MS
-                lastConnectedAt = SystemClock.elapsedRealtime()
-                updateState(ConnectionState.Connected)
-                runSessionLoops(handles.socket, handles.session)
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: SecurityException) {
-                Log.w(TAG, "Bluetooth permission missing", e)
-                Mobile.logError("Bluetooth permission missing: $e")
-                permissionMissing = true
-            } catch (e: Exception) {
-                // Socket/session failure of any kind (IOException from a
-                // dropped connection, or an error from the Go layer) — fall
-                // through to the backoff-and-retry below rather than
-                // crashing the service.
-                Log.w(TAG, "Connection attempt failed, will retry", e)
-                Mobile.logError("Connection attempt failed, will retry: $e")
-            } finally {
-                closeConnection()
-            }
-
-            if (permissionMissing) {
-                if (SystemClock.elapsedRealtime() - lastConnectedAt >= NO_CONNECTION_TIMEOUT_MS) {
-                    stopSelfDueToNoConnection()
-                    return
-                }
-                updateState(ConnectionState.PermissionMissing)
-                delay(PERMISSION_POLL_INTERVAL_MS)
-                continue
-            }
-
-            if (SystemClock.elapsedRealtime() - lastConnectedAt >= NO_CONNECTION_TIMEOUT_MS) {
-                stopSelfDueToNoConnection()
-                return
-            }
-
-            val retrySeconds = (backoffMs / 1000).toInt()
-            updateState(ConnectionState.Disconnected(retrySeconds))
-            delay(backoffMs)
-            backoffMs = (backoffMs * 2).coerceAtMost(MAX_BACKOFF_MS)
-        }
-    }
-
-    private fun stopSelfDueToNoConnection() {
-        val message = "No Bluetooth connection in ${NO_CONNECTION_TIMEOUT_MS / 1000}s, stopping"
-        Log.w(TAG, message)
-        Mobile.logError(message)
+    override fun onNoConnectionTimeout() {
         stopServiceImmediately(ConnectionState.TimedOut)
     }
 
@@ -296,7 +218,7 @@ class ObdForegroundService : Service() {
      *
      * cancel() alone isn't enough either: it can't interrupt a raw
      * blocking call already in flight (BluetoothSocket.connect(),
-     * InputStream.read()), so closeConnection() is called here too —
+     * InputStream.read()), so closeConnectionNow() is called here too —
      * closing the socket directly unblocks any such call from wherever
      * it's stuck, which is what actually makes "stop" mean *now* rather
      * than "whenever the coroutine next happens to check."
@@ -307,14 +229,14 @@ class ObdForegroundService : Service() {
      */
     private fun stopServiceImmediately(finalState: ConnectionState) {
         connectionJob?.cancel()
-        closeConnection()
+        activeEngine?.closeConnectionNow()
         updateState(finalState)
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
 
     @VisibleForTesting
-    internal fun hasBluetoothPermission(): Boolean {
+    override fun hasBluetoothPermission(): Boolean { // public: see ConnectionHandles' comment above
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             return ContextCompat.checkSelfPermission(
                 this, Manifest.permission.BLUETOOTH_CONNECT
@@ -324,7 +246,7 @@ class ObdForegroundService : Service() {
     }
 
     @VisibleForTesting
-    internal fun openConnection(): ConnectionHandles {
+    override fun openConnection(): ConnectionHandles { // public: see ConnectionHandles' comment above
         val bluetoothManager = getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
         val adapter: BluetoothAdapter = bluetoothManager.adapter
             ?: throw IOException("No Bluetooth adapter on this device")
@@ -371,7 +293,8 @@ class ObdForegroundService : Service() {
 
     /**
      * Posts a heads-up notification for a trend anomaly Go's Session.CheckAnomalies
-     * found — see anomalyCheckLoop for how often that runs. A separate, higher-
+     * found — see ObdConnectionEngine.anomalyCheckLoop for how often that
+     * runs. A separate, higher-
      * importance channel from the ongoing connection-status one (CHANNEL_ID):
      * "coolant is overheating" deserves to interrupt in a way "still connected"
      * shouldn't. Not ongoing/persistent, and each metric gets its own notification
@@ -383,24 +306,8 @@ class ObdForegroundService : Service() {
         AnomalyNotifications.post(this, metric, level, message)
     }
 
-    /** Suspends until the reader or writer loop throws (i.e. the socket died). */
-    private suspend fun runSessionLoops(socket: BluetoothSocket, session: ObdSession) = coroutineScope {
-        launch { readLoop(socket, session) }
-        launch { writeLoop(socket, session) }
-        launch { anomalyCheckLoop(session) }
-    }
-
-    /**
-     * Periodically asks Go to re-check today's logged readings for trend
-     * anomalies (coolant temp, battery voltage, fuel trims, catalytic
-     * converter — see internal/trend and internal/monitor) and notifies on
-     * whatever's new. How often to check is this loop's call, same as
-     * writeLoop's POLL_CYCLE_MS is for polling — see DESIGN.md section 4
-     * step 5. A full day's worth of readings gets re-read from disk on every
-     * check (see storage.LoadReadings); ANOMALY_CHECK_INTERVAL_MS is
-     * intentionally much coarser than the polling cycle so that cost stays
-     * bounded rather than paid multiple times a second.
-     */
+    // Git backup check cadence is GIT_BACKUP_CHECK_INTERVAL_MS; Go's
+    // SyncIfNeeded decides whether real work happens, so this can be coarse.
     private suspend fun gitBackupLoop() {
         while (currentCoroutineContext().isActive) {
             delay(GIT_BACKUP_CHECK_INTERVAL_MS)
@@ -422,108 +329,6 @@ class ObdForegroundService : Service() {
             runCatching { DriveBackup.sync(this@ObdForegroundService, File(filesDir, "readings"), folderUri) }
                 .onFailure { Log.w(TAG, "Drive backup check failed", it) }
         }
-    }
-
-    private suspend fun anomalyCheckLoop(session: ObdSession) {
-        while (currentCoroutineContext().isActive) {
-            session.checkAnomalies()
-            delay(ANOMALY_CHECK_INTERVAL_MS)
-        }
-    }
-
-    private suspend fun readLoop(socket: BluetoothSocket, session: ObdSession) {
-        val input = socket.inputStream
-        val buffer = ByteArray(1024)
-        var readCount = 0L
-        while (currentCoroutineContext().isActive) {
-            val read = input.read(buffer) // blocking read, safe on Dispatchers.IO
-            if (read < 0) throw IOException("Bluetooth input stream closed")
-            session.feed(buffer.copyOf(read))
-            readCount++
-            // Log the very first read (confirms the socket is delivering
-            // data end-to-end) and then every READ_DIAGNOSTIC_EVERY_N reads,
-            // noting bytes received so we can gauge throughput vs. command
-            // cadence on real hardware.
-            if (readCount == 1L || readCount % READ_DIAGNOSTIC_EVERY_N == 0L) {
-                val msg = "readLoop read=$readCount bytes=$read"
-                Log.d(TAG, msg)
-                Mobile.logDebug(msg)
-            }
-        }
-    }
-
-    @VisibleForTesting
-    internal fun writeCommand(output: java.io.OutputStream, command: String) {
-        output.write((command + "\r").toByteArray(Charsets.US_ASCII))
-        output.flush()
-    }
-
-    private suspend fun writeLoop(socket: BluetoothSocket, session: ObdSession) {
-        val output = socket.outputStream
-        var cycleCount = 0L
-        val loopStartMs = SystemClock.elapsedRealtime()
-        // Log once at the start of each session so the app log shows the
-        // active polling constants — lets us verify DESIGN.md §12's
-        // COMMAND_INTERVAL_MS/POLL_CYCLE_MS assumptions against real hardware
-        // without needing to rebuild.
-        val startMsg = "writeLoop starting: COMMAND_INTERVAL_MS=$COMMAND_INTERVAL_MS " +
-            "POLL_CYCLE_MS=$POLL_CYCLE_MS commandCount=${session.commandCount()}"
-        Log.d(TAG, startMsg)
-        Mobile.logDebug(startMsg)
-        // ELM327 setup, once per connection, before any PID/discovery command
-        // — see DESIGN.md section 4 step 5 for why this exists.
-        for (i in 0 until Mobile.initCommandCount()) {
-            val initCommand = Mobile.initCommandAt(i)
-            writeCommand(output, initCommand)
-            val initMsg = "writeLoop: sent init command $initCommand"
-            Log.d(TAG, initMsg)
-            Mobile.logDebug(initMsg)
-            delay(COMMAND_INTERVAL_MS)
-        }
-        val initDoneMsg = "writeLoop: init sequence complete (${Mobile.initCommandCount()} commands sent)"
-        Log.d(TAG, initDoneMsg)
-        Mobile.logDebug(initDoneMsg)
-        while (currentCoroutineContext().isActive) {
-            val cycleStart = SystemClock.elapsedRealtime()
-            val commandCount = session.commandCount()
-            for (i in 0L until commandCount) {
-                val command = session.commandAt(i)
-                if (command.isEmpty()) continue
-                writeCommand(output, command)
-                delay(COMMAND_INTERVAL_MS)
-            }
-            delay(POLL_CYCLE_MS)
-            cycleCount++
-            // Log every POLL_DIAGNOSTIC_EVERY_N_CYCLES cycles so we get
-            // real-hardware data on: actual cycle cadence vs. the constants
-            // above, how many commands are being sent (may be fewer after
-            // discovery filters PIDs), and whether cycles are running longer
-            // than expected (which would suggest the ELM327 is slowing us).
-            if (cycleCount % POLL_DIAGNOSTIC_EVERY_N_CYCLES == 0L) {
-                val elapsedSec = (SystemClock.elapsedRealtime() - loopStartMs) / 1000.0
-                val cycleDurationMs = SystemClock.elapsedRealtime() - cycleStart
-                val msg = "writeLoop cycle=$cycleCount elapsed=%.1fs commandCount=$commandCount " +
-                    "cycleDurationMs=${cycleDurationMs}ms"
-                Log.d(TAG, msg.format(elapsedSec))
-                Mobile.logDebug(msg.format(elapsedSec))
-            }
-        }
-    }
-
-    private fun closeConnection() {
-        try {
-            session?.close()
-        } catch (e: Exception) {
-            // Best-effort close; the connection is going away regardless.
-        }
-        session = null
-
-        try {
-            socket?.close()
-        } catch (e: IOException) {
-            // Best-effort close.
-        }
-        socket = null
     }
 
     private fun updateState(state: ConnectionState) {
@@ -594,34 +399,6 @@ class ObdForegroundService : Service() {
         private const val CHANNEL_ID = "obd2_status"
         private const val NOTIFICATION_ID = 1
         private val SPP_UUID: UUID = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
-        private const val INITIAL_BACKOFF_MS = 1_000L
-        private const val MAX_BACKOFF_MS = 30_000L
-        // 200ms, not the original 50ms (which itself was reduced from 100ms
-        // alongside PID expansion — see DESIGN.md section 5.2 and §12).
-        // 200ms is gentler on the ELM327 adapter while still cycling all 32
-        // PIDs in ~7s (200ms * 32 + POLL_CYCLE_MS). Unverified against real
-        // hardware — the diagnostic logs added to writeLoop/readLoop (see
-        // above) will show actual cycle duration on a real device, letting
-        // us tune this value based on real ELM327 behavior.
-        private const val COMMAND_INTERVAL_MS = 200L
-        private const val POLL_CYCLE_MS = 250L
-        // Deliberately much coarser than POLL_CYCLE_MS: each check re-reads
-        // and re-parses the whole day's CSV log from disk (see
-        // storage.LoadReadings), and every trend.Check* function already
-        // only cares about the last 30s-5min of data anyway — there's
-        // nothing to gain from checking more often than this, only more
-        // disk I/O paid for it as the day's log grows.
-        private const val ANOMALY_CHECK_INTERVAL_MS = 60_000L
-        private const val PERMISSION_POLL_INTERVAL_MS = 3_000L
-        private const val NO_CONNECTION_TIMEOUT_MS = 5 * 60 * 1_000L
-        // Emit a writeLoop timing log every N cycles; at 200ms/command and
-        // 32 commands + 250ms POLL_CYCLE_MS overhead, one cycle is ~6.65s,
-        // so N=9 gives a diagnostic line approximately every minute.
-        private const val POLL_DIAGNOSTIC_EVERY_N_CYCLES = 9L
-        // Emit a readLoop bytes-received log every N reads. ELM327 responses
-        // are short (< 20 bytes each), so this is roughly every ~100 command
-        // responses — a few minutes of real driving at 200ms/command.
-        private const val READ_DIAGNOSTIC_EVERY_N = 100L
         // Git backup check cadence. Go's SyncIfNeeded decides whether real
         // work happens, so this can be coarse; 5 minutes is fine.
         private const val GIT_BACKUP_CHECK_INTERVAL_MS = 5 * 60 * 1_000L

@@ -162,29 +162,6 @@ class ObdForegroundServiceTest {
     }
 
     @Test
-    fun `writeCommand writes command with carriage return as ASCII bytes`() {
-        val service = newService()
-        val mockOutputStream = mockk<java.io.OutputStream>(relaxed = true)
-        val slot = io.mockk.slot<ByteArray>()
-
-        io.mockk.every { mockOutputStream.write(capture(slot)) } returns Unit
-
-        service.writeCommand(mockOutputStream, "ATE0")
-
-        io.mockk.verify(exactly = 1) { mockOutputStream.write(any<ByteArray>()) }
-        val wantBytes = "ATE0\r".toByteArray(Charsets.US_ASCII)
-        assertEquals("writeCommand should write command with carriage return",
-            wantBytes.contentToString(), slot.captured.contentToString())
-
-        // Every command write is flushed immediately — writeLoop's init
-        // sequence and main polling loop both rely on writeCommand for
-        // this rather than flushing separately at each call site (a prior
-        // version of this fix only flushed in the main loop, silently
-        // leaving the init sequence unflushed).
-        io.mockk.verify(exactly = 1) { mockOutputStream.flush() }
-    }
-
-    @Test
     fun `reconnectNow does not throw when nothing is connected`() {
         val service = newService()
         service.reconnectNow() // must not throw
