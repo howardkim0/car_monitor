@@ -15,6 +15,7 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.annotation.VisibleForTesting
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CoroutineScope
@@ -180,7 +181,8 @@ class DeviceScanActivity : AppCompatActivity() {
      * neverForLocation flag (see DESIGN.md section 8), so this only needs
      * to check on older versions.
      */
-    private fun isLocationEnabled(): Boolean {
+    @VisibleForTesting
+    internal fun isLocationEnabled(): Boolean {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             return true
         }

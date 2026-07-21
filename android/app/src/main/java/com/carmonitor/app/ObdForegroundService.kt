@@ -68,7 +68,8 @@ class ObdForegroundService : Service() {
         fun getService(): ObdForegroundService = this@ObdForegroundService
     }
 
-    private data class ConnectionHandles(val socket: BluetoothSocket, val session: Session)
+    @VisibleForTesting
+    internal data class ConnectionHandles(val socket: BluetoothSocket, val session: Session)
 
     private val binder = LocalBinder()
     private val scope = CoroutineScope(Dispatchers.IO + Job())
@@ -304,7 +305,8 @@ class ObdForegroundService : Service() {
         stopSelf()
     }
 
-    private fun hasBluetoothPermission(): Boolean {
+    @VisibleForTesting
+    internal fun hasBluetoothPermission(): Boolean {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             return ContextCompat.checkSelfPermission(
                 this, Manifest.permission.BLUETOOTH_CONNECT
@@ -313,7 +315,8 @@ class ObdForegroundService : Service() {
         return true
     }
 
-    private fun openConnection(): ConnectionHandles {
+    @VisibleForTesting
+    internal fun openConnection(): ConnectionHandles {
         val bluetoothManager = getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
         val adapter: BluetoothAdapter = bluetoothManager.adapter
             ?: throw IOException("No Bluetooth adapter on this device")
@@ -538,7 +541,8 @@ class ObdForegroundService : Service() {
         AnomalyNotifications.ensureChannel(this)
     }
 
-    private fun buildNotification(state: ConnectionState): Notification {
+    @VisibleForTesting
+    internal fun buildNotification(state: ConnectionState): Notification {
         val contentIntent = PendingIntent.getActivity(
             this,
             0,

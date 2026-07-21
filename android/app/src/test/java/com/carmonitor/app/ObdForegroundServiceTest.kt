@@ -1,7 +1,9 @@
 package com.carmonitor.app
 
+import android.Manifest
 import android.app.Notification
 import android.app.NotificationManager
+import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothSocket
 import android.content.Context
 import android.content.Intent
@@ -21,6 +23,7 @@ import org.junit.runner.RunWith
 import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
+import org.robolectric.Shadows.shadowOf
 import org.robolectric.android.controller.ServiceController
 import org.robolectric.annotation.Config
 
@@ -185,6 +188,159 @@ class ObdForegroundServiceTest {
     fun `reconnectNow does not throw when nothing is connected`() {
         val service = newService()
         service.reconnectNow() // must not throw
+    }
+
+    @Test
+    @Config(sdk = [30])
+    fun `hasBluetoothPermission is always true below API 31`() {
+        val service = newService()
+        assertTrue(service.hasBluetoothPermission())
+    }
+
+    @Test
+    fun `hasBluetoothPermission reflects BLUETOOTH_CONNECT grant on API 31+`() {
+        val service = newService()
+        assertFalse(
+            "should be false before the permission is granted",
+            service.hasBluetoothPermission()
+        )
+
+        shadowOf(service.application).grantPermissions(Manifest.permission.BLUETOOTH_CONNECT)
+
+        assertTrue(
+            "should be true once BLUETOOTH_CONNECT is granted",
+            service.hasBluetoothPermission()
+        )
+    }
+
+    // openConnection() must fail fast — before ever touching Mobile.deviceMAC()
+    // — when Bluetooth itself is off, rather than trying to open a socket
+    // against a disabled adapter.
+    @Test
+    fun `openConnection throws when the Bluetooth adapter is disabled`() {
+        val service = newService()
+        val bluetoothManager = service.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
+        shadowOf(bluetoothManager.adapter).setEnabled(false)
+
+        try {
+            service.openConnection()
+            fail("expected an IOException when the adapter is disabled")
+        } catch (e: IOException) {
+            assertEquals("Bluetooth is disabled", e.message)
+        }
+    }
+
+    @Test
+    fun `addStatusListener immediately delivers the current state`() {
+        val service = newService()
+        var received: ObdForegroundService.ConnectionState? = null
+        val listener = object : ObdForegroundService.StatusListener {
+            override fun onStateChanged(state: ObdForegroundService.ConnectionState) {
+                received = state
+            }
+            override fun onReading(name: String, value: Double, unit: String) {}
+        }
+
+        service.addStatusListener(listener)
+
+        assertNotNull("a newly-added listener should be told the current state right away", received)
+    }
+
+    @Test
+    fun `removeStatusListener stops further state updates`() {
+        val service = newService()
+        var callCount = 0
+        val listener = object : ObdForegroundService.StatusListener {
+            override fun onStateChanged(state: ObdForegroundService.ConnectionState) { callCount++ }
+            override fun onReading(name: String, value: Double, unit: String) {}
+        }
+        service.addStatusListener(listener)
+        val countAfterAdd = callCount
+
+        service.removeStatusListener(listener)
+        val app = RuntimeEnvironment.getApplication()
+        service.onStartCommand(
+            Intent(app, ObdForegroundService::class.java).setAction(ObdForegroundService.ACTION_STOP), 0, 1
+        )
+
+        assertEquals(
+            "a removed listener must not hear about a later state change",
+            countAfterAdd,
+            callCount
+        )
+    }
+
+    @Test
+    fun `LocalBinder getService returns the owning service`() {
+        val service = newService()
+        val binder = service.onBind(Intent(RuntimeEnvironment.getApplication(), ObdForegroundService::class.java))
+            as ObdForegroundService.LocalBinder
+
+        assertSame(service, binder.getService())
+    }
+
+    @Test
+    fun `onDestroy cancels an active connectionJob`() {
+        val service = newService()
+        val app = RuntimeEnvironment.getApplication()
+        service.onStartCommand(Intent(app, ObdForegroundService::class.java), 0, 1)
+        val job = service.connectionJob
+        assertNotNull(job)
+        assertTrue(job!!.isActive)
+
+        service.onDestroy()
+
+        // Not job.isCancelled: onDestroy() cancels via scope.cancel() (the
+        // parent), not connectionJob.cancel() directly (unlike the
+        // ACTION_STOP test above) — isCancelled can lag until the child
+        // coroutine is actually scheduled to observe it, but isActive
+        // flips immediately and is what actually matters here: the job is
+        // no longer running.
+        assertFalse("onDestroy must cancel the running connectionJob", job.isActive)
+    }
+
+    @Test
+    fun `buildNotification uses the disconnected retry-countdown text`() {
+        val service = newService()
+        val notification = service.buildNotification(ObdForegroundService.ConnectionState.Disconnected(retryInSeconds = 7))
+
+        assertEquals(
+            service.getString(R.string.notification_disconnected, 7),
+            notification.extras.getCharSequence(Notification.EXTRA_TEXT).toString()
+        )
+    }
+
+    @Test
+    fun `buildNotification uses the permission-missing text`() {
+        val service = newService()
+        val notification = service.buildNotification(ObdForegroundService.ConnectionState.PermissionMissing)
+
+        assertEquals(
+            service.getString(R.string.notification_permission_missing),
+            notification.extras.getCharSequence(Notification.EXTRA_TEXT).toString()
+        )
+    }
+
+    @Test
+    fun `buildNotification uses the timed-out text`() {
+        val service = newService()
+        val notification = service.buildNotification(ObdForegroundService.ConnectionState.TimedOut)
+
+        assertEquals(
+            service.getString(R.string.notification_timed_out),
+            notification.extras.getCharSequence(Notification.EXTRA_TEXT).toString()
+        )
+    }
+
+    @Test
+    fun `buildNotification uses the stopped text`() {
+        val service = newService()
+        val notification = service.buildNotification(ObdForegroundService.ConnectionState.Stopped)
+
+        assertEquals(
+            service.getString(R.string.notification_stopped),
+            notification.extras.getCharSequence(Notification.EXTRA_TEXT).toString()
+        )
     }
 
     // ACTION_QUIT is deliberately NOT exercised through onStartCommand()
