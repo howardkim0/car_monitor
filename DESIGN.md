@@ -64,7 +64,12 @@ The split:
   copy SSH public key, and test alert; tapping either toggle again
   collapses its group. Battery-
   optimization exemption, stop/start scanning, and quit stay outside
-  both groups, always visible. The whole screen is wrapped in a
+  both groups, always visible. The live readings display gets the same
+  treatment via its own "Readings" toggle, directly
+  below the status line and collapsed by default — the full ~32-PID
+  profile updating live is, on its own, long enough to push every
+  button below it off-screen, the same crowding problem the Logs/
+  Settings toggles exist to solve. The whole screen is wrapped in a
   `ScrollView` — with this many buttons, an unscrollable layout
   overflows the visible area on real phone screens, silently pushing
   whatever's past the fold (see `docs/defects.md`) out of reach.
