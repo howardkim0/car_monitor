@@ -83,3 +83,14 @@ both together per `CLAUDE.md`.
   to working, tested code when adding the car-screen feature. Unifying
   the two is a reasonable cleanup (one implementation instead of two
   that can drift), not required. — [#16](../../../issues/16)
+- **Other `Mobile`/`Session` call sites share `ObdConnectionEngine`'s
+  native-touch test ceiling.** `ObdMobile`/`ObdSession` (`DESIGN.md`
+  section 3/4) exist so the engine's connect/backoff/retry loop is
+  testable under virtual time, but `ObdDeviceLister`,
+  `DeviceScanActivity`, `ObdDeviceScanner`, `StatusActivity`, and
+  `CarMonitorApplication` all call `Mobile`/`Session` directly too and
+  hit the same Robolectric `UnsatisfiedLinkError` ceiling — deliberately
+  out of scope since none have a `delay()`-driven loop to test against
+  virtual time, only synchronous one-shot calls with no cited bug.
+  `ObdMobile` already exists as the seam to extend if one ever needs
+  it. — [#18](../../../issues/18)

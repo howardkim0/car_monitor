@@ -80,6 +80,21 @@ for the share sheet (`LogExporter`), copying readings to a user-chosen
 Storage Access Framework folder (`DriveBackup`, section 7), Bluetooth
 discovery UI — stay Kotlin-only rather than round-tripping through Go.
 
+`ObdMobile`/`ObdSession` (section 4) are a narrow exception worth
+naming explicitly: thin Kotlin interfaces over the `gomobile`-bound
+`Mobile`/`Session` calls both `ObdConnectionEngine`'s loops and
+`ObdForegroundService`'s own `openConnection()`/`buildNotification()`/
+git-backup loop make, each with a one-line-per-method `Real*`
+implementation. They exist purely as a Kotlin-side testing seam —
+`mobile.Mobile` is a generated `static native`-method class, not a
+Kotlin `object`, so it can't be mocked directly the way
+`ObdDeviceLister`/`ObdDeviceScanner` are elsewhere (section 11's
+"Shared logic, not duplicated logic") — not a relocation of business
+logic. No decision about protocol framing, backoff timing, or polling
+cadence moves from Go to Kotlin; only the shape of the existing Kotlin
+connection/backoff code changes, so it's reachable by
+`kotlinx-coroutines-test`'s virtual time instead of only real hardware.
+
 ## 4. Architecture
 
 ```
@@ -129,9 +144,27 @@ discovery UI — stay Kotlin-only rather than round-tripping through Go.
 
 ### Data flow
 
-1. `ObdForegroundService` opens an RFCOMM socket to `Mobile.deviceMAC()`
-   (the selected device, section 5.1, or the hardcoded fallback) using
-   the standard SPP UUID (`00001101-0000-1000-8000-00805F9B34FB`).
+Within the Kotlin box above, `ObdForegroundService` itself only opens
+the `BluetoothSocket` and handles Android lifecycle/permissions/the
+notification — the connect-read-write-backoff loop is owned by
+`ObdConnectionEngine`, a plain (non-`Service`) class the Service
+constructs and drives from its own coroutine scope. This split exists
+solely for testability (section 3): `ObdConnectionEngine` takes its
+`ObdMobile`/`ObdSession` dependencies and a `clock: () -> Long` via its
+constructor, so `connectionLoop`/`readLoop`/`writeLoop`/
+`anomalyCheckLoop` are exercised directly under
+`kotlinx-coroutines-test`'s virtual time in `ObdConnectionEngineTest`,
+with no Service, no Robolectric, and no real multi-minute waits.
+`ObdForegroundService` implements a small `Callbacks` interface the
+engine reports state/permission/timeout events through.
+
+1. `ObdConnectionEngine` asks `ObdForegroundService` (via `Callbacks`)
+   to open an RFCOMM socket to `Mobile.deviceMAC()` (the selected
+   device, section 5.1, or the hardcoded fallback) using the standard
+   SPP UUID (`00001101-0000-1000-8000-00805F9B34FB`) — this one step
+   stays on the Service since it needs a real `Context`/
+   `BluetoothManager`/`BluetoothSocket`, none of which carry the
+   coroutine-timing complexity the engine split exists to test.
 2. Raw bytes read from the socket are pushed into Go via
    `Session.Feed(data []byte)`.
 3. `internal/obd2` frames ELM327 responses, matches them to outstanding
@@ -520,12 +553,15 @@ register it as a GitHub deploy key without `adb`.
   Stop/Start toggle on the status screen and a notification "Stop"
   action both send `ACTION_STOP`. `stopServiceImmediately()` — the
   single teardown path shared by manual stop, Quit, and the timeout
-  above — does three things, in order:
+  above — does three things, in order (all still called on
+  `ObdForegroundService`; step 2 delegates into the active
+  `ObdConnectionEngine`, section 4, which owns the socket/session it's
+  closing):
   1. `connectionJob?.cancel()` — cancellation alone can't interrupt a
      blocking call already in flight (`connect()`, `read()`), so this
      only takes effect at the next suspension point.
-  2. `closeConnection()`, called directly — unblocks a call from (1)
-     stuck mid-flight, from whichever thread it's on.
+  2. `engine.closeConnectionNow()`, called directly — unblocks a call
+     from (1) stuck mid-flight, from whichever thread it's on.
   3. `updateState()` with the terminal state, then
      `stopForeground`+`stopSelf`.
 
@@ -542,11 +578,11 @@ register it as a GitHub deploy key without `adb`.
   takes the whole process down (everything runs in one process).
 - **`reconnectNow()`**: used when switching the selected device (section
   5.1) rather than adding a fourth teardown path — deliberately lighter
-  than `stopServiceImmediately()`: just closes the current
-  socket/session so `connectionLoop`'s own retry logic reconnects with
-  the new `DeviceMAC()`, without touching `connectionJob`, without a
-  terminal `ConnectionState`, and without requiring "Start Scanning"
-  afterward.
+  than `stopServiceImmediately()`: delegates straight to
+  `engine.closeConnectionNow()` so `connectionLoop`'s own retry logic
+  reconnects with the new `DeviceMAC()`, without touching
+  `connectionJob`, without a terminal `ConnectionState`, and without
+  requiring "Start Scanning" afterward.
 - **Git backup loop** runs independently of the Bluetooth lifecycle, in
   the Service's own coroutine scope (started once in `onCreate()`,
   cancelled in `onDestroy()`) rather than introducing `WorkManager` as a
@@ -678,6 +714,21 @@ through Robolectric/MockK — a materially larger, more speculative
 undertaking. `android/` tests target regression coverage for bugs
 actually found, not a percentage. CI reports Android coverage (Kover) as
 a build artifact; it isn't gated.
+
+`ObdConnectionEngine` (section 4) is a deliberate exception to
+"regression tests only," not a reversal of the rule above: its
+connect/backoff/retry state machine is plain logic once its `ObdMobile`/
+`ObdSession`/clock dependencies are injected, so `ObdConnectionEngineTest`
+exercises it directly under `kotlinx-coroutines-test` virtual time
+(exponential backoff and its 30s cap, the 5-minute no-connection
+timeout, cancellation never being swallowed as a retryable failure) —
+the same kind of case `go/` already covers at 100%, just expressed in
+Kotlin because the Bluetooth/Service APIs it drives are Kotlin-only
+(section 3). Every other `Mobile`/`Session` call site outside this one
+file (`ObdDeviceLister`, `DeviceScanActivity`, and friends) is
+unaffected and stays out of scope — none of them have a `delay()`-driven
+loop to test against virtual time, only synchronous one-shot calls
+(`docs/open-questions.md`).
 
 **Regression tests exist for bugs actually found during development**,
 per `CLAUDE.md`'s "every caught bug gets a regression test" — see
