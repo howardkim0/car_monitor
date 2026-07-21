@@ -141,6 +141,31 @@ class StatusActivityTest {
     }
 
     @Test
+    fun `Readings button expands and collapses its readings group`() {
+        val activity = newActivity()
+        val readingsGroup = activity.findViewById<android.view.View>(R.id.readingsGroup)
+        assertEquals(
+            "readings group should start collapsed",
+            android.view.View.GONE,
+            readingsGroup.visibility
+        )
+
+        activity.findViewById<android.widget.Button>(R.id.readingsButton).performClick()
+        assertEquals(
+            "tapping Readings should expand the group",
+            android.view.View.VISIBLE,
+            readingsGroup.visibility
+        )
+
+        activity.findViewById<android.widget.Button>(R.id.readingsButton).performClick()
+        assertEquals(
+            "tapping Readings again should collapse the group back",
+            android.view.View.GONE,
+            readingsGroup.visibility
+        )
+    }
+
+    @Test
     fun `Logs button expands and collapses its button group`() {
         val activity = newActivity()
         val logsGroup = activity.findViewById<android.view.View>(R.id.logsGroup)

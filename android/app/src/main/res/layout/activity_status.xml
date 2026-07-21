@@ -17,12 +17,30 @@
             android:textStyle="bold"
             android:paddingBottom="16dp" />
 
-        <TextView
-            android:id="@+id/readingsText"
+        <Button
+            android:id="@+id/readingsButton"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:textSize="16sp"
-            android:fontFamily="monospace" />
+            android:backgroundTint="@color/toggle_button_background"
+            android:textColor="@color/toggle_button_text"
+            android:text="@string/readings_button" />
+
+        <LinearLayout
+            android:id="@+id/readingsGroup"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:visibility="gone">
+
+            <TextView
+                android:id="@+id/readingsText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:textSize="16sp"
+                android:fontFamily="monospace" />
+
+        </LinearLayout>
 
         <Button
             android:id="@+id/batteryOptimizationButton"

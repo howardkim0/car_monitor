@@ -44,6 +44,8 @@ class StatusActivity : AppCompatActivity(), ObdForegroundService.StatusListener 
 
     private lateinit var statusText: TextView
     private lateinit var readingsText: TextView
+    private lateinit var readingsButton: Button
+    private lateinit var readingsGroup: android.view.View
     private lateinit var batteryOptimizationButton: Button
     private lateinit var logsButton: Button
     private lateinit var logsGroup: android.view.View
@@ -139,6 +141,9 @@ class StatusActivity : AppCompatActivity(), ObdForegroundService.StatusListener 
 
         statusText = findViewById(R.id.statusText)
         readingsText = findViewById(R.id.readingsText)
+        readingsGroup = findViewById(R.id.readingsGroup)
+        readingsButton = findViewById(R.id.readingsButton)
+        readingsButton.setOnClickListener { toggleGroup(readingsGroup) }
         batteryOptimizationButton = findViewById(R.id.batteryOptimizationButton)
         batteryOptimizationButton.setOnClickListener { requestBatteryOptimizationExemption() }
         logsGroup = findViewById(R.id.logsGroup)
