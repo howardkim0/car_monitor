@@ -35,7 +35,6 @@ import kotlinx.coroutines.launch
 import mobile.AnomalyListener
 import mobile.Mobile
 import mobile.ReadingListener
-import mobile.Session
 import java.io.File
 import java.io.IOException
 import java.util.UUID
@@ -44,9 +43,13 @@ import java.util.concurrent.CopyOnWriteArrayList
 /**
  * Foreground service owning the Bluetooth link to the hardcoded OBD2 dongle.
  * See DESIGN.md sections 4 and 7: this is deliberately dumb I/O plumbing —
- * all protocol framing/decoding lives in the Go [Session]; this class only
+ * all protocol framing/decoding lives in Go's Session type; this class only
  * moves bytes in and out of the socket and turns connection state into a
- * notification and callbacks for [StatusActivity].
+ * notification and callbacks for [StatusActivity]. `Mobile`/`Session` calls
+ * go through [ObdMobile]/[ObdSession] (DESIGN.md section 3) rather than the
+ * gomobile-bound types directly, so this behavior is testable without a
+ * native library loaded — [mobile] defaults to [RealObdMobile] and is only
+ * ever swapped for a fake in tests.
  */
 class ObdForegroundService : Service() {
 
@@ -69,11 +72,16 @@ class ObdForegroundService : Service() {
     }
 
     @VisibleForTesting
-    internal data class ConnectionHandles(val socket: BluetoothSocket, val session: Session)
+    internal data class ConnectionHandles(val socket: BluetoothSocket, val session: ObdSession)
 
     private val binder = LocalBinder()
     private val scope = CoroutineScope(Dispatchers.IO + Job())
     private val listeners = CopyOnWriteArrayList<StatusListener>()
+
+    // Swappable only for tests (never reassigned in production) — see the
+    // class doc comment above and DESIGN.md section 3.
+    @VisibleForTesting
+    internal var mobile: ObdMobile = RealObdMobile
 
     // @Volatile: read/written from both this service's own IO-dispatcher
     // coroutine (connectionLoop() and friends) and the main thread
@@ -83,7 +91,7 @@ class ObdForegroundService : Service() {
     @Volatile
     private var socket: BluetoothSocket? = null
     @Volatile
-    private var session: Session? = null
+    private var session: ObdSession? = null
     @Volatile
     @VisibleForTesting
     internal var connectionJob: Job? = null
@@ -332,12 +340,12 @@ class ObdForegroundService : Service() {
         // was denied (it's only requested by DeviceScanActivity, not
         // unconditionally at every connection attempt), for no benefit if
         // nothing is actually scanning.
-        val device = adapter.getRemoteDevice(Mobile.deviceMAC(filesDir.absolutePath))
+        val device = adapter.getRemoteDevice(mobile.deviceMAC(filesDir.absolutePath))
         val newSocket = device.createRfcommSocketToServiceRecord(SPP_UUID)
         connectSocket(newSocket)
 
         val newSession = try {
-            Mobile.newSession(filesDir.absolutePath, sessionListener, anomalyListener)
+            mobile.newSession(filesDir.absolutePath, sessionListener, anomalyListener)
         } catch (e: Exception) {
             newSocket.close()
             throw e
@@ -376,7 +384,7 @@ class ObdForegroundService : Service() {
     }
 
     /** Suspends until the reader or writer loop throws (i.e. the socket died). */
-    private suspend fun runSessionLoops(socket: BluetoothSocket, session: Session) = coroutineScope {
+    private suspend fun runSessionLoops(socket: BluetoothSocket, session: ObdSession) = coroutineScope {
         launch { readLoop(socket, session) }
         launch { writeLoop(socket, session) }
         launch { anomalyCheckLoop(session) }
@@ -416,14 +424,14 @@ class ObdForegroundService : Service() {
         }
     }
 
-    private suspend fun anomalyCheckLoop(session: Session) {
+    private suspend fun anomalyCheckLoop(session: ObdSession) {
         while (currentCoroutineContext().isActive) {
             session.checkAnomalies()
             delay(ANOMALY_CHECK_INTERVAL_MS)
         }
     }
 
-    private suspend fun readLoop(socket: BluetoothSocket, session: Session) {
+    private suspend fun readLoop(socket: BluetoothSocket, session: ObdSession) {
         val input = socket.inputStream
         val buffer = ByteArray(1024)
         var readCount = 0L
@@ -450,7 +458,7 @@ class ObdForegroundService : Service() {
         output.flush()
     }
 
-    private suspend fun writeLoop(socket: BluetoothSocket, session: Session) {
+    private suspend fun writeLoop(socket: BluetoothSocket, session: ObdSession) {
         val output = socket.outputStream
         var cycleCount = 0L
         val loopStartMs = SystemClock.elapsedRealtime()
@@ -562,8 +570,8 @@ class ObdForegroundService : Service() {
             PendingIntent.FLAG_IMMUTABLE
         )
         val text = when (state) {
-            is ConnectionState.Connecting -> getString(R.string.notification_connecting, Mobile.selectedDeviceName(filesDir.absolutePath))
-            is ConnectionState.Connected -> getString(R.string.notification_connected, Mobile.selectedDeviceName(filesDir.absolutePath))
+            is ConnectionState.Connecting -> getString(R.string.notification_connecting, mobile.selectedDeviceName(filesDir.absolutePath))
+            is ConnectionState.Connected -> getString(R.string.notification_connected, mobile.selectedDeviceName(filesDir.absolutePath))
             is ConnectionState.Disconnected -> getString(R.string.notification_disconnected, state.retryInSeconds)
             is ConnectionState.PermissionMissing -> getString(R.string.notification_permission_missing)
             is ConnectionState.TimedOut -> getString(R.string.notification_timed_out)

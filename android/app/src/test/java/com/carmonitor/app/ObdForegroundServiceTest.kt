@@ -230,6 +230,55 @@ class ObdForegroundServiceTest {
         }
     }
 
+    // Previously untestable: a successful openConnection() calls
+    // Mobile.deviceMAC()/Mobile.newSession() directly, which throws
+    // UnsatisfiedLinkError under Robolectric's plain JVM. Swapping in a
+    // FakeObdMobile (PR 2 of docs/plan-obd-service-testability.md) avoids
+    // the native touch entirely.
+    @Test
+    fun `openConnection returns handles wired to the fake session on success`() {
+        val service = newService()
+        val bluetoothManager = service.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
+        shadowOf(bluetoothManager.adapter).setEnabled(true)
+        val fakeSession = FakeObdSession()
+        val fakeMobile = FakeObdMobile(deviceMac = "AA:BB:CC:DD:EE:FF").apply {
+            newSessionResult = { fakeSession }
+        }
+        service.mobile = fakeMobile
+
+        val handles = service.openConnection()
+
+        assertSame(fakeSession, handles.session)
+        assertNotNull(handles.socket)
+        assertEquals(listOf(service.filesDir.absolutePath), fakeMobile.newSessionCalls)
+    }
+
+    @Test
+    fun `buildNotification uses the connecting text with the fake device name`() {
+        val service = newService()
+        service.mobile = FakeObdMobile(selectedName = "Garage OBDLink")
+
+        val notification = service.buildNotification(ObdForegroundService.ConnectionState.Connecting)
+
+        assertEquals(
+            service.getString(R.string.notification_connecting, "Garage OBDLink"),
+            notification.extras.getCharSequence(Notification.EXTRA_TEXT).toString()
+        )
+    }
+
+    @Test
+    fun `buildNotification uses the connected text with the fake device name`() {
+        val service = newService()
+        service.mobile = FakeObdMobile(selectedName = "Garage OBDLink")
+
+        val notification = service.buildNotification(ObdForegroundService.ConnectionState.Connected)
+
+        assertEquals(
+            service.getString(R.string.notification_connected, "Garage OBDLink"),
+            notification.extras.getCharSequence(Notification.EXTRA_TEXT).toString()
+        )
+    }
+
     @Test
     fun `addStatusListener immediately delivers the current state`() {
         val service = newService()
