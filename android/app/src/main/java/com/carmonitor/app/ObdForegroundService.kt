@@ -16,7 +16,6 @@ import android.os.Binder
 import android.os.Build
 import android.os.IBinder
 import android.os.Process
-import android.util.Log
 import androidx.annotation.VisibleForTesting
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
@@ -25,12 +24,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.currentCoroutineContext
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import mobile.AnomalyListener
-import mobile.Mobile
 import mobile.ReadingListener
 import java.io.File
 import java.io.IOException
@@ -120,8 +115,8 @@ class ObdForegroundService : Service(), ObdConnectionEngine.Callbacks {
         // "Start Scanning" is tapped, DESIGN.md section 7), silently
         // dropping any logging from an Activity used in that state. See
         // docs/defects.md.
-        scope.launch { gitBackupLoop() }
-        scope.launch { driveBackupLoop() }
+        scope.launch { backupLoops.gitBackupLoop() }
+        scope.launch { backupLoops.driveBackupLoop() }
         createNotificationChannel()
         createAnomalyNotificationChannel()
         startForeground(NOTIFICATION_ID, buildNotification(latestState))
@@ -306,29 +301,17 @@ class ObdForegroundService : Service(), ObdConnectionEngine.Callbacks {
         AnomalyNotifications.post(this, metric, level, message)
     }
 
-    // Git backup check cadence is GIT_BACKUP_CHECK_INTERVAL_MS; Go's
-    // SyncIfNeeded decides whether real work happens, so this can be coarse.
-    private suspend fun gitBackupLoop() {
-        while (currentCoroutineContext().isActive) {
-            delay(GIT_BACKUP_CHECK_INTERVAL_MS)
-            runCatching { Mobile.syncLogsIfNeeded(filesDir.absolutePath) }
-                .onFailure { Log.w(TAG, "git backup check failed", it) }
-        }
-    }
-
-    /**
-     * A no-op until a folder is configured (DriveBackupPrefs.getFolderUri()
-     * returns null) — see DESIGN.md section 7. Reuses gitBackupLoop's
-     * cadence rather than introducing a second interval constant; there's
-     * no reason for these to diverge yet.
-     */
-    private suspend fun driveBackupLoop() {
-        while (currentCoroutineContext().isActive) {
-            delay(GIT_BACKUP_CHECK_INTERVAL_MS)
-            val folderUri = DriveBackupPrefs.getFolderUri(this@ObdForegroundService) ?: continue
-            runCatching { DriveBackup.sync(this@ObdForegroundService, File(filesDir, "readings"), folderUri) }
-                .onFailure { Log.w(TAG, "Drive backup check failed", it) }
-        }
+    // Constructed lazily, not at field-init time: filesDir needs the
+    // Service's Context, which isn't attached yet when field initializers
+    // run. By the time onCreate() first touches this (below), it is.
+    @VisibleForTesting
+    internal val backupLoops: BackupLoops by lazy {
+        BackupLoops(
+            mobile = mobile,
+            storageDir = filesDir.absolutePath,
+            getDriveFolderUri = { DriveBackupPrefs.getFolderUri(this) },
+            syncDrive = { folderUri -> DriveBackup.sync(this, File(filesDir, "readings"), folderUri) }
+        )
     }
 
     private fun updateState(state: ConnectionState) {
@@ -395,13 +378,9 @@ class ObdForegroundService : Service(), ObdConnectionEngine.Callbacks {
     }
 
     companion object {
-        private const val TAG = "ObdForegroundService"
         private const val CHANNEL_ID = "obd2_status"
         private const val NOTIFICATION_ID = 1
         private val SPP_UUID: UUID = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
-        // Git backup check cadence. Go's SyncIfNeeded decides whether real
-        // work happens, so this can be coarse; 5 minutes is fine.
-        private const val GIT_BACKUP_CHECK_INTERVAL_MS = 5 * 60 * 1_000L
         @VisibleForTesting
         internal const val ACTION_STOP = "com.carmonitor.app.action.STOP"
         @VisibleForTesting

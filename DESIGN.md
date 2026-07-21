@@ -583,12 +583,18 @@ register it as a GitHub deploy key without `adb`.
   reconnects with the new `DeviceMAC()`, without touching
   `connectionJob`, without a terminal `ConnectionState`, and without
   requiring "Start Scanning" afterward.
-- **Git backup loop** runs independently of the Bluetooth lifecycle, in
-  the Service's own coroutine scope (started once in `onCreate()`,
-  cancelled in `onDestroy()`) rather than introducing `WorkManager` as a
-  second background mechanism. Checked every 5 minutes
-  (`GIT_BACKUP_CHECK_INTERVAL_MS`, matching `gitbackup.Syncer`'s own
-  `syncInterval`). A failed push (e.g. no cell signal on a mountain
+- **Git backup loop** runs independently of the Bluetooth lifecycle,
+  owned by `BackupLoops` (a plain class `ObdForegroundService`
+  constructs and drives from its own coroutine scope, started once in
+  `onCreate()`, cancelled in `onDestroy()`) rather than introducing
+  `WorkManager` as a second background mechanism. `BackupLoops` exists
+  for the same testability reason as `ObdConnectionEngine` (section 4):
+  its `ObdMobile` and Drive-backup callbacks are constructor-injected,
+  so its cadence and failure-handling run under
+  `kotlinx-coroutines-test` virtual time in `BackupLoopsTest`, no
+  Service or real 5-minute waits required. Checked every 5 minutes
+  (`BackupLoops.BACKUP_CHECK_INTERVAL_MS`, matching `gitbackup.Syncer`'s
+  own `syncInterval`). A failed push (e.g. no cell signal on a mountain
   drive) is caught, logged via `Mobile.logError`, and retried next
   cycle — never blocks anything; `lastSynced` only advances on success.
   Network calls (`PlainCloneContext`/`PushContext`) are timeout-bounded
@@ -620,11 +626,12 @@ register it as a GitHub deploy key without `adb`.
   (`contentResolver.takePersistableUriPermission`, saved via
   `DriveBackupPrefs`) and writes to it the same way regardless of what
   backs it. Entirely Kotlin (`DriveBackup`), no `go/` involvement — see
-  section 3's Kotlin-only framework-concerns note. Runs on the same
-  independent-of-Bluetooth, `onCreate()`-started coroutine-scope pattern
-  as the git backup loop, on the same 5-minute cadence
-  (`GIT_BACKUP_CHECK_INTERVAL_MS`), and is a no-op until a folder is
-  configured. Copies only `readings-*.csv` files — never `app.log`/
+  section 3's Kotlin-only framework-concerns note. Also owned by
+  `BackupLoops`, on the same independent-of-Bluetooth,
+  `onCreate()`-started coroutine-scope pattern and the same 5-minute
+  cadence (`BackupLoops.BACKUP_CHECK_INTERVAL_MS`) as the git backup
+  loop, and is a no-op until a folder is configured. Copies only
+  `readings-*.csv` files — never `app.log`/
   `app.log.1` — into the chosen folder: any file not already present
   there, plus the current day's still-growing file every cycle (older,
   rotated files are immutable once written, so they're copied once and
@@ -728,7 +735,10 @@ Kotlin because the Bluetooth/Service APIs it drives are Kotlin-only
 file (`ObdDeviceLister`, `DeviceScanActivity`, and friends) is
 unaffected and stays out of scope — none of them have a `delay()`-driven
 loop to test against virtual time, only synchronous one-shot calls
-(`docs/open-questions.md`).
+(`docs/open-questions.md`). `BackupLoops` (section 7) gets the same
+treatment for the same reason — `BackupLoopsTest` verifies its 5-minute
+cadence and that a failed sync doesn't kill the loop, under the same
+virtual time.
 
 **Regression tests exist for bugs actually found during development**,
 per `CLAUDE.md`'s "every caught bug gets a regression test" — see
