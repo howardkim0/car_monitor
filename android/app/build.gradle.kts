@@ -129,4 +129,7 @@ dependencies {
     testImplementation("org.robolectric:robolectric:4.13")
     testImplementation("io.mockk:mockk:1.13.11")
     testImplementation("androidx.car.app:app-testing:1.7.0")
+    // Virtual-time coroutine testing for ObdConnectionEngine (DESIGN.md
+    // section 4/10) — matches the kotlinx-coroutines-android version above.
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.8.0")
 }
