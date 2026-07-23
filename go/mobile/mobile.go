@@ -63,13 +63,15 @@ func NewSession(storageDir string, listener ReadingListener, anomalyListener Ano
 	if err := storage.PruneOldReadingLogs(readingsDir, storage.MaxReadingLogFiles); err != nil {
 		LogError(fmt.Sprintf("prune reading logs: %v", err))
 	}
-	return newSessionWithStore(store, readingsDir, listener, anomalyListener), nil
+	return newSessionWithStore(store, readingsDir, vehicle.SelectedOrDefault(storageDir), listener, anomalyListener), nil
 }
 
 // newSessionWithStore holds the actual reading-pipeline wiring, factored
 // out of NewSession so a test can inject a fake Store — e.g. to exercise
-// the Append-error path below without needing a real filesystem failure.
-func newSessionWithStore(store storage.Store, readingsDir string, listener ReadingListener, anomalyListener AnomalyListener) *Session {
+// the Append-error path below without needing a real filesystem failure
+// — and a specific vehicle.Profile without touching a real
+// SelectedOrDefault-backed directory.
+func newSessionWithStore(store storage.Store, readingsDir string, profile vehicle.Profile, listener ReadingListener, anomalyListener AnomalyListener) *Session {
 	s := &Session{
 		store:           store,
 		readingsDir:     readingsDir,
@@ -82,7 +84,7 @@ func newSessionWithStore(store storage.Store, readingsDir string, listener Readi
 	// connection, not once per app lifetime. Answers DESIGN.md §12's
 	// question about real-hardware round-trip timing.
 	var firstReading bool
-	s.inner = obd2.NewSessionWithLogger(vehicle.Default(), func(r obd2.Reading) {
+	s.inner = obd2.NewSessionWithLogger(profile, func(r obd2.Reading) {
 		if !firstReading {
 			firstReading = true
 			LogDebug(fmt.Sprintf("obd2: first reading received — pipeline alive: pid=0x%02X name=%q value=%.2f %s",
@@ -217,4 +219,104 @@ func InitCommandAt(i int) string {
 		return ""
 	}
 	return cmds[i]
+}
+
+// VehicleYearCount returns how many distinct model years the in-app
+// vehicle picker's first step should list — see internal/vehicle.Years
+// and DESIGN.md section 5.3. gomobile can't return a []int cleanly, so
+// Kotlin polls VehicleYearCount/VehicleYearAt on a Count/At pair, the
+// same convention as Session.CommandCount/CommandAt.
+func VehicleYearCount() int {
+	return len(vehicle.Years())
+}
+
+// VehicleYearAt returns the i'th model year (descending, newest first).
+// Returns 0 if i is out of range rather than panicking across the
+// gomobile/JNI boundary.
+func VehicleYearAt(i int) int {
+	years := vehicle.Years()
+	if i < 0 || i >= len(years) {
+		return 0
+	}
+	return years[i]
+}
+
+// VehicleMakeCount returns how many distinct makes have at least one
+// profile for year — see internal/vehicle.Makes.
+func VehicleMakeCount(year int) int {
+	return len(vehicle.Makes(year))
+}
+
+// VehicleMakeAt returns the i'th make for year, alphabetical. Returns ""
+// if i is out of range.
+func VehicleMakeAt(year int, i int) string {
+	makes := vehicle.Makes(year)
+	if i < 0 || i >= len(makes) {
+		return ""
+	}
+	return makes[i]
+}
+
+// VehicleModelCount returns how many distinct models have at least one
+// profile for year+make — see internal/vehicle.Models.
+func VehicleModelCount(year int, make string) int {
+	return len(vehicle.Models(year, make))
+}
+
+// VehicleModelAt returns the i'th model for year+make, alphabetical.
+// Returns "" if i is out of range.
+func VehicleModelAt(year int, make string, i int) string {
+	models := vehicle.Models(year, make)
+	if i < 0 || i >= len(models) {
+		return ""
+	}
+	return models[i]
+}
+
+// VehicleTrimCount returns how many named trims exist for
+// year+make+model — zero when that combination has exactly one,
+// untrimmed profile, which is the vehicle picker's cue to skip its
+// Trim/Engine step entirely (DESIGN.md section 5.3) rather than show a
+// single-item list with nothing to actually choose.
+func VehicleTrimCount(year int, make, model string) int {
+	return len(vehicle.Trims(year, make, model))
+}
+
+// VehicleTrimAt returns the i'th trim for year+make+model, alphabetical.
+// Returns "" if i is out of range.
+func VehicleTrimAt(year int, make, model string, i int) string {
+	trims := vehicle.Trims(year, make, model)
+	if i < 0 || i >= len(trims) {
+		return ""
+	}
+	return trims[i]
+}
+
+// SetSelectedVehicle persists year/make/model/trim as the vehicle
+// SelectedVehicleSummary and mobile.NewSession use from now on,
+// overriding the hardcoded fallback — called after the user completes
+// the in-app vehicle picker (DESIGN.md section 5.3). Returns an error
+// if year/make/model/trim doesn't resolve to a known
+// internal/vehicle.Profile, rather than silently persisting a selection
+// nothing could ever load back.
+func SetSelectedVehicle(storageDir string, year int, make, model, trim string) error {
+	profile, ok := vehicle.Find(year, make, model, trim)
+	if !ok {
+		return fmt.Errorf("no vehicle profile matches year=%d make=%q model=%q trim=%q", year, make, model, trim)
+	}
+	return vehicle.SaveSelected(storageDir, profile)
+}
+
+// SelectedVehicleSummary returns a short display string for the
+// currently active vehicle profile (user-selected if present, else the
+// hardcoded fallback) — e.g. "2023 Subaru Forester", or with a trim
+// suffix ("2023 Subaru Forester Wilderness") when one is set — for the
+// picker's confirm step and the status screen's settings display.
+func SelectedVehicleSummary(storageDir string) string {
+	p := vehicle.SelectedOrDefault(storageDir)
+	summary := fmt.Sprintf("%d %s %s", p.Year, p.Make, p.Model)
+	if p.Trim != "" {
+		summary += " " + p.Trim
+	}
+	return summary
 }

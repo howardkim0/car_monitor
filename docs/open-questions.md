@@ -6,11 +6,6 @@ only what might change. Each item below is also tracked as a GitHub
 issue (linked) so it doesn't only live in a doc nobody re-reads; update
 both together per `CLAUDE.md`.
 
-- **Vehicle selection has no in-app UI.** Unlike device selection
-  (resolved, `DESIGN.md` section 5.1), vehicle is still hardcoded to
-  `vehicle.Default()`. A bundled JSON asset, or extending the
-  device-picker UI to also cover vehicle profile, are both additive
-  given section 5's interfaces. — [#2](../../../issues/2)
 - **DTC (fault code) reading/clearing is out of scope for v1** but fits
   the same PID-request pattern in `internal/obd2`. — [#3](../../../issues/3)
 - **`obd2.InitCommands()` (`DESIGN.md` section 4 step 5) is unverified

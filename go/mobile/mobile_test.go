@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/howardkim0/car_monitor/go/internal/obd2"
+	"github.com/howardkim0/car_monitor/go/internal/vehicle"
 )
 
 type fakeListener struct {
@@ -127,7 +128,7 @@ func TestNewSessionWithStoreLogsAppendErrorsInsteadOfSwallowingThem(t *testing.T
 	defer CloseAppLog()
 
 	store := &fakeStore{appendErr: errors.New("disk full")}
-	session := newSessionWithStore(store, t.TempDir(), nil, nil)
+	session := newSessionWithStore(store, t.TempDir(), vehicle.Default(), nil, nil)
 
 	session.Feed([]byte("41 0C 1A F8\r"))
 
@@ -172,14 +173,14 @@ func TestSessionCommands(t *testing.T) {
 func TestCheckAnomaliesIsNoOpWithoutListener(t *testing.T) {
 	// Must not panic and must not attempt to read anything (the readings
 	// dir here doesn't even exist) — nothing would consume the result.
-	session := newSessionWithStore(&fakeStore{}, filepath.Join(t.TempDir(), "nonexistent"), nil, nil)
+	session := newSessionWithStore(&fakeStore{}, filepath.Join(t.TempDir(), "nonexistent"), vehicle.Default(), nil, nil)
 	session.CheckAnomalies()
 }
 
 func TestCheckAnomaliesFiresOnceThenStaysSilentWhileUnchanged(t *testing.T) {
 	dir := t.TempDir()
 	listener := &fakeAnomalyListener{}
-	session := newSessionWithStore(&fakeStore{}, dir, nil, listener)
+	session := newSessionWithStore(&fakeStore{}, dir, vehicle.Default(), nil, listener)
 
 	writeReadingsCSV(t, dir, [][]string{
 		{"5", "Coolant Temperature", "112.5", "C", time.Now().UTC().Format(time.RFC3339Nano)},
@@ -202,7 +203,7 @@ func TestCheckAnomaliesFiresOnceThenStaysSilentWhileUnchanged(t *testing.T) {
 func TestCheckAnomaliesFiresAgainOnEscalation(t *testing.T) {
 	dir := t.TempDir()
 	listener := &fakeAnomalyListener{}
-	session := newSessionWithStore(&fakeStore{}, dir, nil, listener)
+	session := newSessionWithStore(&fakeStore{}, dir, vehicle.Default(), nil, listener)
 
 	writeReadingsCSV(t, dir, [][]string{
 		{"5", "Coolant Temperature", "104.0", "C", time.Now().UTC().Format(time.RFC3339Nano)}, // Warning
@@ -225,7 +226,7 @@ func TestCheckAnomaliesFiresAgainOnEscalation(t *testing.T) {
 func TestCheckAnomaliesRefiresAfterRecoveryAndRecurrence(t *testing.T) {
 	dir := t.TempDir()
 	listener := &fakeAnomalyListener{}
-	session := newSessionWithStore(&fakeStore{}, dir, nil, listener)
+	session := newSessionWithStore(&fakeStore{}, dir, vehicle.Default(), nil, listener)
 
 	writeReadingsCSV(t, dir, [][]string{
 		{"5", "Coolant Temperature", "112.5", "C", time.Now().UTC().Format(time.RFC3339Nano)}, // Critical
@@ -257,7 +258,7 @@ func TestCheckAnomaliesLogsLoadReadingsErrors(t *testing.T) {
 
 	dir := t.TempDir()
 	listener := &fakeAnomalyListener{}
-	session := newSessionWithStore(&fakeStore{}, dir, nil, listener)
+	session := newSessionWithStore(&fakeStore{}, dir, vehicle.Default(), nil, listener)
 
 	// A directory sitting at the exact path LoadReadings wants to open as
 	// a file makes it fail with something other than "doesn't exist".
@@ -368,6 +369,138 @@ func TestNewSessionLogsPruneErrorButStillCreatesSession(t *testing.T) {
 	}
 	if !strings.Contains(string(data), "prune reading logs") {
 		t.Errorf("app.log should record prune error, got: %s", string(data))
+	}
+}
+
+func TestVehicleYearCountAndAt(t *testing.T) {
+	if got := VehicleYearCount(); got != 1 {
+		t.Fatalf("VehicleYearCount() = %d, want 1 (only the hardcoded 2023 Forester today)", got)
+	}
+	if got := VehicleYearAt(0); got != 2023 {
+		t.Errorf("VehicleYearAt(0) = %d, want 2023", got)
+	}
+	if got := VehicleYearAt(-1); got != 0 {
+		t.Errorf("VehicleYearAt(-1) = %d, want 0, not a panic", got)
+	}
+	if got := VehicleYearAt(VehicleYearCount()); got != 0 {
+		t.Errorf("VehicleYearAt(VehicleYearCount()) = %d, want 0, not a panic", got)
+	}
+}
+
+func TestVehicleMakeCountAndAt(t *testing.T) {
+	if got := VehicleMakeCount(2023); got != 1 {
+		t.Fatalf("VehicleMakeCount(2023) = %d, want 1", got)
+	}
+	if got := VehicleMakeAt(2023, 0); got != "Subaru" {
+		t.Errorf("VehicleMakeAt(2023, 0) = %q, want %q", got, "Subaru")
+	}
+	if got := VehicleMakeAt(2023, -1); got != "" {
+		t.Errorf("VehicleMakeAt(2023, -1) = %q, want empty string, not a panic", got)
+	}
+	if got := VehicleMakeCount(1999); got != 0 {
+		t.Errorf("VehicleMakeCount(1999) = %d, want 0 for a year with no profiles", got)
+	}
+}
+
+func TestVehicleModelCountAndAt(t *testing.T) {
+	if got := VehicleModelCount(2023, "Subaru"); got != 1 {
+		t.Fatalf("VehicleModelCount(2023, Subaru) = %d, want 1", got)
+	}
+	if got := VehicleModelAt(2023, "Subaru", 0); got != "Forester" {
+		t.Errorf("VehicleModelAt(2023, Subaru, 0) = %q, want %q", got, "Forester")
+	}
+	if got := VehicleModelAt(2023, "Subaru", -1); got != "" {
+		t.Errorf("VehicleModelAt(2023, Subaru, -1) = %q, want empty string, not a panic", got)
+	}
+	if got := VehicleModelCount(2023, "Honda"); got != 0 {
+		t.Errorf("VehicleModelCount(2023, Honda) = %d, want 0 for a make with no profiles that year", got)
+	}
+}
+
+func TestVehicleTrimCountAndAt(t *testing.T) {
+	// The base 2023 Forester profile is untrimmed (Trim==""), but the
+	// registry also has its Wilderness variant — see internal/vehicle's
+	// subaruForester2023Wilderness — so the picker's Trim step has
+	// exactly one real choice to list for this Make/Model/Year.
+	if got := VehicleTrimCount(2023, "Subaru", "Forester"); got != 1 {
+		t.Fatalf("VehicleTrimCount(2023, Subaru, Forester) = %d, want 1 (Wilderness)", got)
+	}
+	if got := VehicleTrimAt(2023, "Subaru", "Forester", 0); got != "Wilderness" {
+		t.Errorf("VehicleTrimAt(2023, Subaru, Forester, 0) = %q, want %q", got, "Wilderness")
+	}
+	if got := VehicleTrimAt(2023, "Subaru", "Forester", -1); got != "" {
+		t.Errorf("VehicleTrimAt(..., -1) = %q, want empty string, not a panic", got)
+	}
+	if got := VehicleTrimAt(2023, "Subaru", "Forester", VehicleTrimCount(2023, "Subaru", "Forester")); got != "" {
+		t.Errorf("VehicleTrimAt(..., count) = %q, want empty string, not a panic", got)
+	}
+
+	// A single-variant combination (e.g. Camry-style hypothetical unknown
+	// model) has no trims at all: 0, not a stray "".
+	if got := VehicleTrimCount(1999, "Ford", "Fusion"); got != 0 {
+		t.Errorf("VehicleTrimCount for an unknown vehicle = %d, want 0", got)
+	}
+}
+
+func TestSetSelectedVehicleThenSelectedVehicleSummary(t *testing.T) {
+	dir := t.TempDir()
+	if err := SetSelectedVehicle(dir, 2023, "Subaru", "Forester", ""); err != nil {
+		t.Fatalf("SetSelectedVehicle: %v", err)
+	}
+	if got, want := SelectedVehicleSummary(dir), "2023 Subaru Forester"; got != want {
+		t.Errorf("SelectedVehicleSummary(dir) = %q, want %q", got, want)
+	}
+}
+
+func TestSelectedVehicleSummaryIncludesTrimWhenSet(t *testing.T) {
+	dir := t.TempDir()
+	if err := SetSelectedVehicle(dir, 2023, "Subaru", "Forester", "Wilderness"); err != nil {
+		t.Fatalf("SetSelectedVehicle: %v", err)
+	}
+	if got, want := SelectedVehicleSummary(dir), "2023 Subaru Forester Wilderness"; got != want {
+		t.Errorf("SelectedVehicleSummary(dir) = %q, want %q", got, want)
+	}
+}
+
+func TestSetSelectedVehicleRejectsUnknownVehicle(t *testing.T) {
+	dir := t.TempDir()
+	if err := SetSelectedVehicle(dir, 1999, "Ford", "Fusion", ""); err == nil {
+		t.Error("SetSelectedVehicle with an unknown year/make/model/trim should error, got nil")
+	}
+	// Nothing should have been persisted — the summary still reads the fallback.
+	if got, want := SelectedVehicleSummary(dir), "2023 Subaru Forester"; got != want {
+		t.Errorf("SelectedVehicleSummary(dir) after a rejected selection = %q, want unchanged fallback %q", got, want)
+	}
+}
+
+func TestSelectedVehicleSummaryReturnsDefaultWhenNothingSelected(t *testing.T) {
+	if got, want := SelectedVehicleSummary(t.TempDir()), "2023 Subaru Forester"; got != want {
+		t.Errorf("SelectedVehicleSummary(t.TempDir()) = %q, want %q", got, want)
+	}
+}
+
+// TestNewSessionUsesSelectedVehicle guards the actual point of vehicle
+// selection: a Session created after SetSelectedVehicle must decode
+// against that profile, not silently keep using vehicle.Default().
+// Redundant today (the only registry entry is the Forester, same as
+// Default()) but protects the wiring the moment a second profile exists.
+func TestNewSessionUsesSelectedVehicle(t *testing.T) {
+	dir := t.TempDir()
+	if err := SetSelectedVehicle(dir, 2023, "Subaru", "Forester", ""); err != nil {
+		t.Fatalf("SetSelectedVehicle: %v", err)
+	}
+
+	listener := &fakeListener{}
+	session, err := NewSession(dir, listener, nil)
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	defer session.Close()
+
+	session.Feed([]byte("41 0C 1A F8\r"))
+
+	if len(listener.calls) != 1 || listener.calls[0].name != "Engine RPM" {
+		t.Fatalf("listener calls = %+v, want one Engine RPM reading decoded via the selected profile", listener.calls)
 	}
 }
 

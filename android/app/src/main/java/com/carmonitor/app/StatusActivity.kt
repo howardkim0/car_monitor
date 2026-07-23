@@ -60,6 +60,7 @@ class StatusActivity : AppCompatActivity(), ObdForegroundService.StatusListener 
     private lateinit var settingsGroup: android.view.View
     private lateinit var pairDevicesButton: Button
     private lateinit var showPairedButton: Button
+    private lateinit var selectVehicleButton: Button
     private lateinit var stopButton: Button
     private lateinit var quitButton: Button
 
@@ -120,6 +121,18 @@ class StatusActivity : AppCompatActivity(), ObdForegroundService.StatusListener 
         }
     }
 
+    // Same reconnectNow() precedent as deviceScanLauncher above (DESIGN.md
+    // section 5.1/5.3): a vehicle change needs the next connection to
+    // resolve the new vehicle.SelectedOrDefault() rather than waiting for
+    // the Bluetooth link to drop on its own.
+    private val vehiclePickerLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == RESULT_OK) {
+            boundService?.reconnectNow()
+        }
+    }
+
     private val driveFolderPicker = registerForActivityResult(
         ActivityResultContracts.OpenDocumentTree()
     ) { uri -> onDriveFolderChosen(uri) }
@@ -172,6 +185,10 @@ class StatusActivity : AppCompatActivity(), ObdForegroundService.StatusListener 
         pairDevicesButton.setOnClickListener { deviceScanLauncher.launch(Intent(this, DeviceScanActivity::class.java)) }
         showPairedButton = findViewById(R.id.showPairedButton)
         showPairedButton.setOnClickListener { showPairedDevicesDialog() }
+        selectVehicleButton = findViewById(R.id.selectVehicleButton)
+        selectVehicleButton.setOnClickListener {
+            vehiclePickerLauncher.launch(Intent(this, VehiclePickerActivity::class.java))
+        }
         stopButton = findViewById(R.id.stopButton)
         stopButton.setOnClickListener { if (stoppedByUser) startScanning() else stopMonitoring() }
         quitButton = findViewById(R.id.quitButton)

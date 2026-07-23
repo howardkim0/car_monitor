@@ -402,13 +402,17 @@ its Make/Model/Year, a `Trim` label — no changes to `obd2` or Kotlin.
 model)` each list the distinct values one drill-down level down from the
 last (section 5.3); `Find(year, make, model, trim)` resolves a
 fully-specified selection back to its `Profile`. `registry` today still
-holds only the one real, hardware-verified Forester profile —
-deliberately: unlike the SAE-standard PIDs above (universally correct by
-formula, filtered per-ECU by discovery regardless of what's listed),
-claiming a specific *Make/Model/Year* is supported is a claim that
+holds only the one real, hardware-verified vehicle family — the base
+2023 Forester and its Wilderness trim, which reuses the base profile's
+`PIDs` slice as-is rather than duplicating it, since a trim package
+changes suspension/appearance, not what the ECU exposes over generic
+OBD2 — deliberately: unlike the SAE-standard PIDs above (universally
+correct by formula, filtered per-ECU by discovery regardless of what's
+listed), claiming a specific *Make/Model* is supported is a claim that
 vehicle's PID list is actually right, which hasn't been verified for
-anything but the Forester yet. More profiles are added incrementally as
-each is curated (`docs/plan-multi-vehicle-support.md`).
+anything but the Forester yet. More vehicles (as opposed to trims of
+ones already verified) are added incrementally as each is curated
+(`docs/plan-multi-vehicle-support.md`).
 
 ### 5.3 Selecting a vehicle in-app
 
@@ -560,6 +564,19 @@ during `onCreate()` throws `UnsatisfiedLinkError` and fails the test
 outright. `StatusActivity` and `DeviceScanActivity` both follow this
 rule — every `Mobile.*` call from an Activity is dispatched off the
 main thread (see `docs/defects.md` for the regression this traces to).
+
+`VehiclePickerActivity` (section 5.3) is a scoped exception for its
+Count/At read calls specifically (`setSelectedVehicle` still follows the
+rule above, since it does file I/O): they go through the swappable
+`VehicleMobile` seam rather than `Mobile` directly, so Robolectric tests
+inject `FakeVehicleMobile` and never touch the native library at all,
+sidestepping the `UnsatisfiedLinkError` risk this rule exists to avoid.
+In production, calling them inline is deliberate too, not an oversight —
+they're fast, local, in-memory Go lookups with no I/O, and by the time a
+user reaches this screen from the status screen's button,
+`StatusActivity.onCreate()` has already triggered the one-time native
+library load, so there's no first-touch cost left to hide behind a
+background dispatch.
 
 Two build-identification diagnostics, both motivated by log evidence
 that turned out to predate the fix it was meant to confirm (see

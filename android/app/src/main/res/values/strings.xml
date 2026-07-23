@@ -91,4 +91,17 @@
     <string name="device_status_selected">Selected</string>
     <string name="device_status_paired">Paired</string>
     <string name="bluetooth_permission_needed">Bluetooth permission needed to scan/pair</string>
+
+    <string name="select_vehicle_button">Select Vehicle</string>
+    <string name="vehicle_picker_year_title">Model Year</string>
+    <string name="vehicle_picker_year_breadcrumb">Select Vehicle</string>
+    <string name="vehicle_picker_make_title">Make</string>
+    <string name="vehicle_picker_model_title">Model</string>
+    <string name="vehicle_picker_trim_title">Trim / Engine</string>
+    <string name="vehicle_picker_confirm_breadcrumb">Vehicle Selected</string>
+    <string name="vehicle_picker_confirm_title">Confirm</string>
+    <string name="vehicle_picker_confirm_button">Confirm Vehicle</string>
+    <string name="vehicle_picker_change_button">Change Vehicle</string>
+    <string name="vehicle_selected">Vehicle set to %1$s</string>
+    <string name="vehicle_select_failed">Failed to select vehicle — check app log</string>
 </resources>

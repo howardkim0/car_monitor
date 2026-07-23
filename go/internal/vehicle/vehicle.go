@@ -1,10 +1,17 @@
 // Package vehicle holds per-car OBD2 PID definitions and decode formulas.
-// See DESIGN.md section 5.2: today there is exactly one hardcoded vehicle
-// profile, but internal/obd2 only ever depends on Profile, so adding a
-// second car is additive.
+// See DESIGN.md section 5.2: internal/obd2 only ever depends on Profile,
+// so adding a second car to registry is additive.
 package vehicle
 
-import "fmt"
+import (
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
+	"strconv"
+	"strings"
+)
 
 // Mode is an OBD2 service/mode identifier.
 type Mode byte
@@ -29,6 +36,7 @@ type Profile struct {
 	Make  string
 	Model string
 	Year  int
+	Trim  string // "" when this Make/Model/Year has only one variant
 	PIDs  []PID
 }
 
@@ -103,10 +111,187 @@ var subaruForester2023 = Profile{
 	},
 }
 
+// subaruForester2023Wilderness is the off-road-package trim of the same
+// 2023 Forester above -- same FB25 2.5L NA engine and control module as
+// the base profile, so it reuses its PIDs slice as-is rather than
+// duplicating it: Wilderness changes suspension, gearing, and
+// cladding/skid plates, none of which touches what the ECU exposes over
+// generic OBD2 Mode 01. Not independently hardware-verified (only the
+// base trim above has been, per docs/defects.md's "Trend / anomaly
+// detection" investigation), but this is an engineering inference about
+// the same verified engine/ECU family, not a guess about an unverified
+// vehicle the way a different Make/Model would be.
+var subaruForester2023Wilderness = Profile{
+	Make:  "Subaru",
+	Model: "Forester",
+	Year:  2023,
+	Trim:  "Wilderness",
+	PIDs:  subaruForester2023.PIDs,
+}
+
+// registry lists every vehicle profile this app is aware of. Adding
+// support for a new car means appending here; internal/obd2 and the
+// Android shell only ever depend on Profile, never on a literal
+// Make/Model/Year/Trim (DESIGN.md section 5.2).
+//
+// Deliberately holds only the one real, hardware-verified vehicle
+// family so far (both entries are the same 2023 Forester): unlike the SAE-standard PID formulas above (universally correct
+// regardless of vehicle, filtered per-ECU by internal/obd2's discovery
+// step at runtime), claiming a specific Make/Model is
+// supported is a claim about that vehicle's PID list actually being
+// right, which hasn't been verified for anything but the Forester yet
+// — see docs/plan-multi-vehicle-support.md for how more are added.
+var registry = []Profile{
+	subaruForester2023,
+	subaruForester2023Wilderness,
+}
+
 // Default returns the vehicle profile the app should decode readings
-// against.
+// against absent any user selection — see SelectedOrDefault.
 func Default() Profile {
-	return subaruForester2023
+	return registry[0]
+}
+
+// Years returns every distinct model year present in registry,
+// descending (newest first) — the first step of the in-app vehicle
+// picker (DESIGN.md section 5.3).
+func Years() []int {
+	seen := make(map[int]bool)
+	var years []int
+	for _, p := range registry {
+		if !seen[p.Year] {
+			seen[p.Year] = true
+			years = append(years, p.Year)
+		}
+	}
+	sort.Sort(sort.Reverse(sort.IntSlice(years)))
+	return years
+}
+
+// Makes returns every distinct make with at least one registry profile
+// for year, sorted alphabetically.
+func Makes(year int) []string {
+	seen := make(map[string]bool)
+	var makes []string
+	for _, p := range registry {
+		if p.Year == year && !seen[p.Make] {
+			seen[p.Make] = true
+			makes = append(makes, p.Make)
+		}
+	}
+	sort.Strings(makes)
+	return makes
+}
+
+// Models returns every distinct model with at least one registry
+// profile for year+make, sorted alphabetically.
+func Models(year int, make string) []string {
+	seen := map[string]bool{}
+	var models []string
+	for _, p := range registry {
+		if p.Year == year && p.Make == make && !seen[p.Model] {
+			seen[p.Model] = true
+			models = append(models, p.Model)
+		}
+	}
+	sort.Strings(models)
+	return models
+}
+
+// Trims returns every distinct, non-empty trim for year+make+model,
+// sorted alphabetically. Empty (not [""]) when that combination has
+// exactly one, untrimmed profile — the picker UI uses that to skip its
+// Trim/Engine step entirely rather than showing a single-item list with
+// nothing to actually choose.
+func Trims(year int, make, model string) []string {
+	seen := map[string]bool{}
+	var trims []string
+	for _, p := range registry {
+		if p.Year == year && p.Make == make && p.Model == model && p.Trim != "" && !seen[p.Trim] {
+			seen[p.Trim] = true
+			trims = append(trims, p.Trim)
+		}
+	}
+	sort.Strings(trims)
+	return trims
+}
+
+// Find returns the registry profile matching year/make/model/trim
+// exactly (trim "" for an untrimmed single-variant profile), and
+// whether one exists.
+func Find(year int, make, model, trim string) (Profile, bool) {
+	for _, p := range registry {
+		if p.Year == year && p.Make == make && p.Model == model && p.Trim == trim {
+			return p, true
+		}
+	}
+	return Profile{}, false
+}
+
+const selectedVehicleFileName = "selected_vehicle.txt"
+
+// SaveSelected persists p's identifying fields (not its PIDs, which are
+// always resolved fresh from registry via Find — see LoadSelected) as
+// the user's chosen vehicle, overriding Default() until changed again —
+// see DESIGN.md section 5.3. Written as "year\nmake\nmodel\ntrim\n",
+// matching internal/device's plain-text-over-JSON philosophy for small,
+// simple, human-inspectable on-device state.
+func SaveSelected(dir string, p Profile) error {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("create vehicle selection dir %q: %w", dir, err)
+	}
+	data := strconv.Itoa(p.Year) + "\n" + p.Make + "\n" + p.Model + "\n" + p.Trim + "\n"
+	path := filepath.Join(dir, selectedVehicleFileName)
+	if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+		return fmt.Errorf("write vehicle selection %q: %w", path, err)
+	}
+	return nil
+}
+
+// LoadSelected reads back a persisted selection under dir, if one
+// exists, resolving it through Find rather than trusting a PIDs list
+// read from disk (Profile.PIDs holds function values, which can't
+// round-trip through a text file anyway). ok is false (not an error) if
+// SaveSelected has never been called there, or if the saved
+// year/make/model/trim no longer matches any registry entry (e.g. an
+// app update removed it) — a stale selection falls back to Default()
+// the same way "never selected" does, rather than surfacing an error
+// for something the user didn't do wrong.
+func LoadSelected(dir string) (profile Profile, ok bool, err error) {
+	path := filepath.Join(dir, selectedVehicleFileName)
+	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return Profile{}, false, nil
+	}
+	if err != nil {
+		return Profile{}, false, fmt.Errorf("read vehicle selection %q: %w", path, err)
+	}
+	lines := strings.Split(string(data), "\n")
+	if len(lines) < 4 || lines[0] == "" || lines[1] == "" || lines[2] == "" {
+		return Profile{}, false, fmt.Errorf("vehicle selection %q is malformed", path)
+	}
+	year, err := strconv.Atoi(lines[0])
+	if err != nil {
+		return Profile{}, false, fmt.Errorf("vehicle selection %q has invalid year %q: %w", path, lines[0], err)
+	}
+	p, found := Find(year, lines[1], lines[2], lines[3])
+	if !found {
+		return Profile{}, false, nil
+	}
+	return p, true, nil
+}
+
+// SelectedOrDefault returns LoadSelected's result if a valid selection
+// exists under dir, else Default(). A read/parse/no-longer-resolves
+// error is treated the same as "no selection" — best-effort, falls back
+// rather than blocking every connection attempt over a corrupted or
+// stale preference file.
+func SelectedOrDefault(dir string) Profile {
+	profile, ok, err := LoadSelected(dir)
+	if err != nil || !ok {
+		return Default()
+	}
+	return profile
 }
 
 // decodeRPM implements the SAE J1979 formula for PID 0x0C: ((A*256)+B)/4.
