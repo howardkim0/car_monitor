@@ -86,7 +86,8 @@ code that already exists:
 This ordering applies to feature additions/adjustments specifically —
 small fixes, refactors, and doc-only tweaks that don't touch
 DESIGN.md-relevant behavior stay on the lighter existing process (edit,
-review, commit together when asked).
+review, commit, then push — all pre-authorized together once asked to
+commit).
 
 The pre-authorization in steps 3 and 5 is scoped narrowly to pushing
 these two commits to `main` as part of this workflow — it does not
