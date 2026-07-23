@@ -909,12 +909,13 @@ lifecycle behavior is verified via the Desktop Head Unit instead (see
 
 ## 12. Check for Updates
 
-A Settings-group button (`StatusActivity`) that checks GitHub Releases
-for a newer debug-signed build than the one currently running,
-downloads it, and offers to install it in place — a manual pull the
-user triggers, not a background poller. Framework-only concern (no
-vehicle/protocol logic involved), so this is 100% Kotlin, same
-precedent as the Google Drive backup path (section 7): no `go/` changes.
+Checks GitHub Releases for a newer debug-signed build than the one
+currently running, downloads it, and offers to install it in place —
+both from a manual Settings-group button and automatically once per
+app launch, never as an unconditional background poller independent of
+the app being opened. Framework-only concern (no vehicle/protocol logic
+involved), so this is 100% Kotlin, same precedent as the Google Drive
+backup path (section 7): no `go/` changes.
 
 **Why `versionCode` alone is enough to compare.** `build.gradle.kts`
 derives both `versionCode`/`versionName` from the repo's total commit
@@ -938,21 +939,23 @@ JSON `assets` array is searched by name for `car-monitor-debug.apk` to
 get a `browser_download_url` to download from.
 
 **Split, same shape as log export (`LogExporter`'s precedent, section 3).** `AppUpdater`
-(plain Kotlin, no Android imports) owns the fetch/parse/compare logic
-with the network and PackageManager calls injected as plain function
-parameters — the same seam-injection precedent as
+(no Android framework classes beyond the `org.json` platform stub Kotlin
+already ships with, which needs Robolectric — not plain JUnit like
+`LogExporterTest` — to actually parse in a test) owns the fetch/parse/
+compare logic with the network and PackageManager calls injected as
+plain function parameters — the same seam-injection precedent as
 `ObdConnectionEngine`'s injected `clock: () -> Long` (section 4) —
 so the control flow (asset lookup, version comparison, the
 package-name guard) is unit-testable with fakes standing in for real
 I/O. `StatusActivity` owns everything Android-specific: the
-`REQUEST_INSTALL_PACKAGES` permission check, building the
-`FileProvider` URI (the same `FileProvider.getUriForFile()` call
-`exportLogs()` already makes, reusing its existing `<cache-path
-name="logs" path="." />` entry since that covers the whole cache root),
-and firing the install `Intent`.
+`REQUEST_INSTALL_PACKAGES` permission check, the available-update
+dialog, building the `FileProvider` URI (the same
+`FileProvider.getUriForFile()` call `exportLogs()` already makes,
+reusing its existing `<cache-path name="logs" path="." />` entry since
+that covers the whole cache root), and firing the install `Intent`.
 
 **Permission flow matches section 7's battery-optimization exemption:
-request-and-forget, not tracked via callback.** If
+request-and-forget, not tracked via callback — manual button only.** If
 `packageManager.canRequestPackageInstalls()` is false, the button
 launches `Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES` via a plain
 `startActivity()` and stops — no `ActivityResultLauncher`, no
@@ -960,7 +963,30 @@ result-checking. The user grants it in Settings, backs out, and taps
 the button again; `canRequestPackageInstalls()` is simply re-polled
 fresh at the top of the function next time, the same "ground truth
 re-checked on the next call" convention `updateBatteryOptimizationButtonVisibility()`
-already uses.
+already uses. The automatic on-launch check (below) never launches this
+settings screen unprompted — a missing grant just makes it silently
+skip, since sending the user to a permission-granting screen the moment
+they open the app, with no button tapped, would be the kind of
+surprising background side effect this app avoids elsewhere too
+(section 7: resuming after a stop is always explicit).
+
+**Automatic on-launch check, silent except for a genuine update.**
+`StatusActivity.onCreate()` also runs the same check unconditionally
+(regardless of `stoppedByUser`, matching the unconditional SSH-key-load
+precedent already there), but stays completely silent for
+up-to-date/failed/permission-missing outcomes — none of that is useful
+on every single app open, unlike the manual button's checking/up-to-
+date/failed toasts. Only an actual `UpdateAvailable` result surfaces
+anything, and only if its `versionCode` wasn't already dismissed.
+`UpdateDismissalPrefs` persists the single most-recently-dismissed
+`versionCode` (not just a boolean) so dismissing one build doesn't
+suppress a later, newer one, and the manual button always re-shows the
+dialog regardless of any prior dismissal — dismissal only mutes the
+automatic path. Both paths converge on the same
+`showUpdateAvailableDialog()` (Install/Dismiss), so there's one
+"update found" UX regardless of which path found it, not two that can
+drift apart (the same reasoning behind `AnomalyNotifications` in
+section 4 step 6).
 
 **Known limitation, deliberately not checked ahead of time.** In-place
 update (installing over the existing app without an uninstall) only
