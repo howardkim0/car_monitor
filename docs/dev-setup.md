@@ -228,3 +228,18 @@ explicitly if a USB session was ever forwarded too:
 ```sh
 adb -s <ip>:<port> forward tcp:5277 tcp:5277
 ```
+
+**On a real car (not DHU): sideloaded apps may need "Unknown
+sources" enabled — unverified, tracked in
+[#17](../../../issues/17).** A build installed via `adb`/Android
+Studio rather than Play Store may not appear as a selectable app in a
+real head unit's launcher at all, even though the same build's
+`StatusActivity`/`ObdForegroundService` work fine and DHU testing
+above shows nothing wrong locally — Android Auto gates non-Play-Store
+car apps behind its own developer setting: Android Auto app →
+Settings → tap the version number to unlock developer settings →
+**"Unknown sources."** This is separate from, and not fixed by,
+`CarMonitorCarAppService`'s debug-vs-release `HostValidator` split
+(section 11 of `DESIGN.md`, [#13](../../../issues/13)) — that governs
+which hosts the app itself will render templates for, not whether
+Android Auto lists the app as connectable in the first place.
