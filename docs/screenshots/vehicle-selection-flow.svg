@@ -1,0 +1,204 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1860 716" font-family="Arial, sans-serif">
+<rect x="0" y="0" width="1860" height="716" fill="#f2f2f2"/>
+<rect x="34" y="24" width="312" height="632" rx="30" fill="#000000"/>
+<rect x="40" y="30" width="300" height="620" fill="#121212"/>
+
+  <rect x="40" y="30" width="300" height="28" fill="#000000"/>
+  <text x="54" y="49" font-family="Arial, sans-serif" font-size="11" fill="#ffffff" font-weight="bold">9:41</text>
+  <g fill="#ffffff">
+    <rect x="294" y="41" width="10" height="7" rx="1"/>
+    <rect x="307" y="39" width="10" height="9" rx="1"/>
+    <rect x="320" y="37" width="12" height="14" rx="2"/>
+  </g>
+
+<text x="58" y="102" font-family="Arial, sans-serif" font-size="12" fill="#b993ff">Select Vehicle  •  Step 1 of 4</text>
+<text x="58" y="130" font-family="Arial, sans-serif" font-size="23" font-weight="bold" fill="#e6e6e6">Model Year</text>
+
+<rect x="40" y="150" width="300" height="64" fill="#1c1c1c"/>
+<text x="58" y="188.4" font-family="Arial, sans-serif" font-size="16" font-weight="normal" fill="#e6e6e6">2026</text>
+<text x="312" y="188.0" font-family="Arial, sans-serif" font-size="16" fill="#6b6b6b">&#8250;</text><line x1="40" y1="214" x2="340" y2="214" stroke="#2a2a2a" stroke-width="1"/>
+
+<rect x="40" y="206" width="300" height="64" fill="#1c1c1c"/>
+<text x="58" y="244.4" font-family="Arial, sans-serif" font-size="16" font-weight="normal" fill="#e6e6e6">2025</text>
+<text x="312" y="244.0" font-family="Arial, sans-serif" font-size="16" fill="#6b6b6b">&#8250;</text><line x1="40" y1="270" x2="340" y2="270" stroke="#2a2a2a" stroke-width="1"/>
+
+<rect x="40" y="262" width="300" height="64" fill="#1c1c1c"/>
+<text x="58" y="300.4" font-family="Arial, sans-serif" font-size="16" font-weight="normal" fill="#e6e6e6">2024</text>
+<text x="312" y="300.0" font-family="Arial, sans-serif" font-size="16" fill="#6b6b6b">&#8250;</text><line x1="40" y1="326" x2="340" y2="326" stroke="#2a2a2a" stroke-width="1"/>
+
+<rect x="40" y="318" width="300" height="64" fill="#2a2440"/>
+<text x="58" y="356.4" font-family="Arial, sans-serif" font-size="16" font-weight="bold" fill="#ffffff">2023</text>
+<polyline points="301,350.0 307,356.0 319,342.0" fill="none" stroke="#b993ff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/><line x1="40" y1="382" x2="340" y2="382" stroke="#2a2a2a" stroke-width="1"/>
+
+<rect x="40" y="374" width="300" height="64" fill="#1c1c1c"/>
+<text x="58" y="412.4" font-family="Arial, sans-serif" font-size="16" font-weight="normal" fill="#e6e6e6">2022</text>
+<text x="312" y="412.0" font-family="Arial, sans-serif" font-size="16" fill="#6b6b6b">&#8250;</text><line x1="40" y1="438" x2="340" y2="438" stroke="#2a2a2a" stroke-width="1"/>
+
+<rect x="40" y="430" width="300" height="64" fill="#1c1c1c"/>
+<text x="58" y="468.4" font-family="Arial, sans-serif" font-size="16" font-weight="normal" fill="#e6e6e6">2021</text>
+<text x="312" y="468.0" font-family="Arial, sans-serif" font-size="16" fill="#6b6b6b">&#8250;</text><line x1="40" y1="494" x2="340" y2="494" stroke="#2a2a2a" stroke-width="1"/>
+
+<rect x="58" y="592" width="264" height="44" rx="8" fill="#b993ff"/>
+<text x="190.0" y="620.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="14" font-weight="bold" letter-spacing="1.5" fill="#1a1330">NEXT</text>
+
+<text x="190.0" y="688" text-anchor="middle" font-family="Arial, sans-serif" font-size="16" font-weight="bold" fill="#333333">1. Model Year</text>
+<rect x="404" y="24" width="312" height="632" rx="30" fill="#000000"/>
+<rect x="410" y="30" width="300" height="620" fill="#121212"/>
+
+  <rect x="410" y="30" width="300" height="28" fill="#000000"/>
+  <text x="424" y="49" font-family="Arial, sans-serif" font-size="11" fill="#ffffff" font-weight="bold">9:41</text>
+  <g fill="#ffffff">
+    <rect x="664" y="41" width="10" height="7" rx="1"/>
+    <rect x="677" y="39" width="10" height="9" rx="1"/>
+    <rect x="690" y="37" width="12" height="14" rx="2"/>
+  </g>
+
+<text x="428" y="102" font-family="Arial, sans-serif" font-size="12" fill="#b993ff">2023  ›  Step 2 of 4</text>
+<text x="428" y="130" font-family="Arial, sans-serif" font-size="23" font-weight="bold" fill="#e6e6e6">Make</text>
+
+<rect x="410" y="150" width="300" height="64" fill="#2a2440"/>
+<text x="428" y="188.4" font-family="Arial, sans-serif" font-size="16" font-weight="bold" fill="#ffffff">Subaru</text>
+<polyline points="671,182.0 677,188.0 689,174.0" fill="none" stroke="#b993ff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/><line x1="410" y1="214" x2="710" y2="214" stroke="#2a2a2a" stroke-width="1"/>
+
+<rect x="410" y="206" width="300" height="64" fill="#1c1c1c"/>
+<text x="428" y="244.4" font-family="Arial, sans-serif" font-size="16" font-weight="normal" fill="#e6e6e6">Toyota</text>
+<text x="682" y="244.0" font-family="Arial, sans-serif" font-size="16" fill="#6b6b6b">&#8250;</text><line x1="410" y1="270" x2="710" y2="270" stroke="#2a2a2a" stroke-width="1"/>
+
+<rect x="410" y="262" width="300" height="64" fill="#1c1c1c"/>
+<text x="428" y="300.4" font-family="Arial, sans-serif" font-size="16" font-weight="normal" fill="#e6e6e6">Honda</text>
+<text x="682" y="300.0" font-family="Arial, sans-serif" font-size="16" fill="#6b6b6b">&#8250;</text><line x1="410" y1="326" x2="710" y2="326" stroke="#2a2a2a" stroke-width="1"/>
+
+<rect x="410" y="318" width="300" height="64" fill="#1c1c1c"/>
+<text x="428" y="356.4" font-family="Arial, sans-serif" font-size="16" font-weight="normal" fill="#e6e6e6">Ford</text>
+<text x="682" y="356.0" font-family="Arial, sans-serif" font-size="16" fill="#6b6b6b">&#8250;</text><line x1="410" y1="382" x2="710" y2="382" stroke="#2a2a2a" stroke-width="1"/>
+
+<rect x="410" y="374" width="300" height="64" fill="#1c1c1c"/>
+<text x="428" y="412.4" font-family="Arial, sans-serif" font-size="16" font-weight="normal" fill="#e6e6e6">Chevrolet</text>
+<text x="682" y="412.0" font-family="Arial, sans-serif" font-size="16" fill="#6b6b6b">&#8250;</text><line x1="410" y1="438" x2="710" y2="438" stroke="#2a2a2a" stroke-width="1"/>
+
+<rect x="410" y="438" width="300" height="64" fill="#1c1c1c"/>
+<text x="428" y="464.88" font-family="Arial, sans-serif" font-size="16" font-weight="normal" fill="#e6e6e6">Other / Generic OBD2</text>
+<text x="428" y="484.08" font-family="Arial, sans-serif" font-size="12" fill="#9a9a9a">Standard SAE PIDs only, no extended support</text>
+<text x="682" y="476.0" font-family="Arial, sans-serif" font-size="16" fill="#6b6b6b">&#8250;</text><line x1="410" y1="502" x2="710" y2="502" stroke="#2a2a2a" stroke-width="1"/>
+
+<rect x="428" y="592" width="264" height="44" rx="8" fill="#b993ff"/>
+<text x="560.0" y="620.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="14" font-weight="bold" letter-spacing="1.5" fill="#1a1330">NEXT</text>
+
+<text x="560.0" y="688" text-anchor="middle" font-family="Arial, sans-serif" font-size="16" font-weight="bold" fill="#333333">2. Make</text>
+<rect x="774" y="24" width="312" height="632" rx="30" fill="#000000"/>
+<rect x="780" y="30" width="300" height="620" fill="#121212"/>
+
+  <rect x="780" y="30" width="300" height="28" fill="#000000"/>
+  <text x="794" y="49" font-family="Arial, sans-serif" font-size="11" fill="#ffffff" font-weight="bold">9:41</text>
+  <g fill="#ffffff">
+    <rect x="1034" y="41" width="10" height="7" rx="1"/>
+    <rect x="1047" y="39" width="10" height="9" rx="1"/>
+    <rect x="1060" y="37" width="12" height="14" rx="2"/>
+  </g>
+
+<text x="798" y="102" font-family="Arial, sans-serif" font-size="12" fill="#b993ff">2023  ›  Subaru  ›  Step 3 of 4</text>
+<text x="798" y="130" font-family="Arial, sans-serif" font-size="23" font-weight="bold" fill="#e6e6e6">Model</text>
+
+<rect x="780" y="150" width="300" height="64" fill="#2a2440"/>
+<text x="798" y="188.4" font-family="Arial, sans-serif" font-size="16" font-weight="bold" fill="#ffffff">Forester</text>
+<polyline points="1041,182.0 1047,188.0 1059,174.0" fill="none" stroke="#b993ff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/><line x1="780" y1="214" x2="1080" y2="214" stroke="#2a2a2a" stroke-width="1"/>
+
+<rect x="780" y="206" width="300" height="64" fill="#1c1c1c"/>
+<text x="798" y="244.4" font-family="Arial, sans-serif" font-size="16" font-weight="normal" fill="#e6e6e6">Outback</text>
+<text x="1052" y="244.0" font-family="Arial, sans-serif" font-size="16" fill="#6b6b6b">&#8250;</text><line x1="780" y1="270" x2="1080" y2="270" stroke="#2a2a2a" stroke-width="1"/>
+
+<rect x="780" y="262" width="300" height="64" fill="#1c1c1c"/>
+<text x="798" y="300.4" font-family="Arial, sans-serif" font-size="16" font-weight="normal" fill="#e6e6e6">Crosstrek</text>
+<text x="1052" y="300.0" font-family="Arial, sans-serif" font-size="16" fill="#6b6b6b">&#8250;</text><line x1="780" y1="326" x2="1080" y2="326" stroke="#2a2a2a" stroke-width="1"/>
+
+<rect x="780" y="318" width="300" height="64" fill="#1c1c1c"/>
+<text x="798" y="356.4" font-family="Arial, sans-serif" font-size="16" font-weight="normal" fill="#e6e6e6">Impreza</text>
+<text x="1052" y="356.0" font-family="Arial, sans-serif" font-size="16" fill="#6b6b6b">&#8250;</text><line x1="780" y1="382" x2="1080" y2="382" stroke="#2a2a2a" stroke-width="1"/>
+
+<rect x="780" y="374" width="300" height="64" fill="#1c1c1c"/>
+<text x="798" y="412.4" font-family="Arial, sans-serif" font-size="16" font-weight="normal" fill="#e6e6e6">WRX</text>
+<text x="1052" y="412.0" font-family="Arial, sans-serif" font-size="16" fill="#6b6b6b">&#8250;</text><line x1="780" y1="438" x2="1080" y2="438" stroke="#2a2a2a" stroke-width="1"/>
+
+<rect x="798" y="592" width="264" height="44" rx="8" fill="#b993ff"/>
+<text x="930.0" y="620.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="14" font-weight="bold" letter-spacing="1.5" fill="#1a1330">NEXT</text>
+
+<text x="930.0" y="688" text-anchor="middle" font-family="Arial, sans-serif" font-size="16" font-weight="bold" fill="#333333">3. Model</text>
+<rect x="1144" y="24" width="312" height="632" rx="30" fill="#000000"/>
+<rect x="1150" y="30" width="300" height="620" fill="#121212"/>
+
+  <rect x="1150" y="30" width="300" height="28" fill="#000000"/>
+  <text x="1164" y="49" font-family="Arial, sans-serif" font-size="11" fill="#ffffff" font-weight="bold">9:41</text>
+  <g fill="#ffffff">
+    <rect x="1404" y="41" width="10" height="7" rx="1"/>
+    <rect x="1417" y="39" width="10" height="9" rx="1"/>
+    <rect x="1430" y="37" width="12" height="14" rx="2"/>
+  </g>
+
+<text x="1168" y="102" font-family="Arial, sans-serif" font-size="12" fill="#b993ff">2023  ›  Subaru  ›  Forester  •  Step 4 of 4</text>
+<text x="1168" y="130" font-family="Arial, sans-serif" font-size="23" font-weight="bold" fill="#e6e6e6">Trim / Engine</text>
+
+<rect x="1150" y="160" width="300" height="68" fill="#2a2440"/>
+<text x="1168" y="188.56" font-family="Arial, sans-serif" font-size="16" font-weight="bold" fill="#ffffff">2.5L NA (FB25)</text>
+<text x="1168" y="208.96" font-family="Arial, sans-serif" font-size="12" fill="#b993ff">32 standard PIDs</text>
+<polyline points="1411,194.0 1417,200.0 1429,186.0" fill="none" stroke="#b993ff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/><line x1="1150" y1="228" x2="1450" y2="228" stroke="#2a2a2a" stroke-width="1"/>
+
+<rect x="1150" y="228" width="300" height="68" fill="#1c1c1c"/>
+<text x="1168" y="256.56" font-family="Arial, sans-serif" font-size="16" font-weight="normal" fill="#e6e6e6">Wilderness (2.5L NA)</text>
+<text x="1168" y="276.96" font-family="Arial, sans-serif" font-size="12" fill="#9a9a9a">32 standard + 4 Subaru extended PIDs</text>
+<text x="1422" y="268.0" font-family="Arial, sans-serif" font-size="16" fill="#6b6b6b">&#8250;</text><line x1="1150" y1="296" x2="1450" y2="296" stroke="#2a2a2a" stroke-width="1"/>
+
+<rect x="1150" y="304" width="300" height="68" fill="#1c1c1c"/>
+<text x="1168" y="332.56" font-family="Arial, sans-serif" font-size="16" font-weight="normal" fill="#e6e6e6">Not sure</text>
+<text x="1168" y="352.96" font-family="Arial, sans-serif" font-size="12" fill="#9a9a9a">Use standard PIDs only (safe default)</text>
+<text x="1422" y="344.0" font-family="Arial, sans-serif" font-size="16" fill="#6b6b6b">&#8250;</text><line x1="1150" y1="372" x2="1450" y2="372" stroke="#2a2a2a" stroke-width="1"/>
+
+<rect x="1168" y="592" width="264" height="44" rx="8" fill="#b993ff"/>
+<text x="1300.0" y="620.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="14" font-weight="bold" letter-spacing="1.5" fill="#1a1330">NEXT</text>
+
+<text x="1300.0" y="688" text-anchor="middle" font-family="Arial, sans-serif" font-size="16" font-weight="bold" fill="#333333">4. Trim / Engine</text>
+<rect x="1514" y="24" width="312" height="632" rx="30" fill="#000000"/>
+<rect x="1520" y="30" width="300" height="620" fill="#121212"/>
+
+  <rect x="1520" y="30" width="300" height="28" fill="#000000"/>
+  <text x="1534" y="49" font-family="Arial, sans-serif" font-size="11" fill="#ffffff" font-weight="bold">9:41</text>
+  <g fill="#ffffff">
+    <rect x="1774" y="41" width="10" height="7" rx="1"/>
+    <rect x="1787" y="39" width="10" height="9" rx="1"/>
+    <rect x="1800" y="37" width="12" height="14" rx="2"/>
+  </g>
+
+<text x="1538" y="102" font-family="Arial, sans-serif" font-size="12" fill="#b993ff">Vehicle Selected</text>
+<text x="1538" y="130" font-family="Arial, sans-serif" font-size="23" font-weight="bold" fill="#e6e6e6">Confirm</text>
+
+<rect x="1538" y="150" width="264" height="262" rx="10" fill="#1c1c1c" stroke="#2a2a2a" stroke-width="1"/>
+<text x="1670.0" y="184" text-anchor="middle" font-family="Arial, sans-serif" font-size="18" font-weight="bold" fill="#e6e6e6">2023 Subaru Forester</text>
+<text x="1670.0" y="206" text-anchor="middle" font-family="Arial, sans-serif" font-size="12" fill="#9a9a9a">2.5L NA (FB25)</text>
+<rect x="1558" y="222" width="224" height="24" rx="12" fill="none" stroke="#b993ff" stroke-width="1.5"/>
+<text x="1670.0" y="238" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" letter-spacing="0.5" fill="#b993ff">STANDARD + EXTENDED PIDS</text>
+<line x1="1558" y1="262" x2="1782" y2="262" stroke="#2a2a2a" stroke-width="1"/>
+<text x="1558" y="284" font-family="Arial, sans-serif" font-size="12" fill="#9a9a9a">Coolant Temperature (0x05)</text>
+<text x="1558" y="302" font-family="Arial, sans-serif" font-size="12" fill="#e0a45c">Via Subaru extended PID</text>
+<text x="1558" y="328" font-family="Arial, sans-serif" font-size="12" fill="#9a9a9a">O2 Sensor Bank 1 Sensor 1 (0x14)</text>
+<text x="1558" y="346" font-family="Arial, sans-serif" font-size="12" fill="#6b6b6b">Not supported by this ECU</text>
+<line x1="1558" y1="364" x2="1782" y2="364" stroke="#2a2a2a" stroke-width="1"/>
+<text x="1670.0" y="388" text-anchor="middle" font-family="Arial, sans-serif" font-size="10.5" fill="#6b6b6b">Full support list confirmed on first connect</text>
+<rect x="1538" y="536" width="264" height="44" rx="8" fill="#b993ff"/>
+<text x="1670.0" y="564.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="14" font-weight="bold" letter-spacing="1.5" fill="#1a1330">CONFIRM VEHICLE</text>
+
+<rect x="1538" y="592" width="264" height="44" rx="8" fill="#4a4a4a"/>
+<text x="1670.0" y="620.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="14" font-weight="bold" letter-spacing="1.5" fill="#d8d8d8">CHANGE VEHICLE</text>
+
+<text x="1670.0" y="688" text-anchor="middle" font-family="Arial, sans-serif" font-size="16" font-weight="bold" fill="#333333">5. Confirm</text>
+<line x1="350" y1="340.0" x2="386" y2="340.0" stroke="#888888" stroke-width="3"/>
+<polygon points="386,332.0 400,340.0 386,348.0" fill="#888888"/>
+
+<line x1="720" y1="340.0" x2="756" y2="340.0" stroke="#888888" stroke-width="3"/>
+<polygon points="756,332.0 770,340.0 756,348.0" fill="#888888"/>
+
+<line x1="1090" y1="340.0" x2="1126" y2="340.0" stroke="#888888" stroke-width="3"/>
+<polygon points="1126,332.0 1140,340.0 1126,348.0" fill="#888888"/>
+
+<line x1="1460" y1="340.0" x2="1496" y2="340.0" stroke="#888888" stroke-width="3"/>
+<polygon points="1496,332.0 1510,340.0 1496,348.0" fill="#888888"/>
+
+</svg>
