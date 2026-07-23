@@ -513,6 +513,17 @@ that turned out to predate the fix it was meant to confirm (see
   the version a driver would actually see and report, distinct from
   `GIT_COMMIT`'s exact-build-matching role.
 
+**OBD2 content diagnostics** (`internal/obd2`, distinct from the two
+build-identification ones above — these are about what the *adapter*
+sent, not which build produced the log) log through the same
+`Mobile.logDebug` hook, wired via `Session`'s optional `logf`. The first
+20 lines of every session are logged with their exact, unstripped byte
+content (`rawLineSampleLimit`), so a real-hardware decode failure shows
+what the adapter actually sent rather than just that nothing decoded.
+Every 100 lines (`statsLogEveryNLines`), a running
+`linesReceived`/`linesDecoded` count and decode percentage is logged —
+this is the stat that led to `docs/defects.md`'s CRLF blank-line fix.
+
 **"View App Logs"** (`LogViewerActivity`) reads `app.log` directly for
 in-app viewing, without needing `adb`, a file manager, or the
 git-backup path (section 7) reachable at all. Kotlin-only, same
@@ -681,6 +692,8 @@ register it as a GitHub deploy key without `adb`.
 - `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` — pairs with section 7's
   exemption prompt.
 - `INTERNET` — for git backup to `car_monitor_logs.git`.
+- `REQUEST_INSTALL_PACKAGES` — pairs with section 12's "Check for
+  Updates" install prompt.
 
 ## 9. Repo layout
 
@@ -893,3 +906,73 @@ OnDoneCallback {})`, asserting template contents and mocked
 (`MockK`'s `mockkObject`) side effects — real end-to-end navigation and
 lifecycle behavior is verified via the Desktop Head Unit instead (see
 `docs/dev-setup.md`).
+
+## 12. Check for Updates
+
+A Settings-group button (`StatusActivity`) that checks GitHub Releases
+for a newer debug-signed build than the one currently running,
+downloads it, and offers to install it in place — a manual pull the
+user triggers, not a background poller. Framework-only concern (no
+vehicle/protocol logic involved), so this is 100% Kotlin, same
+precedent as the Google Drive backup path (section 7): no `go/` changes.
+
+**Why `versionCode` alone is enough to compare.** `build.gradle.kts`
+derives both `versionCode`/`versionName` from the repo's total commit
+count at build time (section 6.2), so there's no need to ask GitHub for
+version metadata at all — download the candidate APK first, read its
+own manifest `versionCode` directly via
+`PackageManager.getPackageArchiveInfo()`, and compare it to the running
+app's `PackageManager.getPackageInfo(packageName, 0).versionCode`. Only
+strictly-greater counts as an update; a package-name mismatch against
+the running app's own `packageName` is checked before ever offering to
+install, as a sanity guard against installing a mismatched artifact.
+
+**Where the build comes from.** `.github/workflows/release-apk.yml`
+publishes a debug-signed APK to a single rolling GitHub Release tagged
+`latest` (deleted and recreated on every push to main that could change
+the build) as asset `car-monitor-debug.apk`. Because that release is
+published `--prerelease`, GitHub's `/releases/latest` convenience
+endpoint won't return it (it explicitly excludes prereleases) — the
+metadata fetch instead hits `/repos/.../releases/tags/latest`, whose
+JSON `assets` array is searched by name for `car-monitor-debug.apk` to
+get a `browser_download_url` to download from.
+
+**Split, same shape as log export (`LogExporter`'s precedent, section 3).** `AppUpdater`
+(plain Kotlin, no Android imports) owns the fetch/parse/compare logic
+with the network and PackageManager calls injected as plain function
+parameters — the same seam-injection precedent as
+`ObdConnectionEngine`'s injected `clock: () -> Long` (section 4) —
+so the control flow (asset lookup, version comparison, the
+package-name guard) is unit-testable with fakes standing in for real
+I/O. `StatusActivity` owns everything Android-specific: the
+`REQUEST_INSTALL_PACKAGES` permission check, building the
+`FileProvider` URI (the same `FileProvider.getUriForFile()` call
+`exportLogs()` already makes, reusing its existing `<cache-path
+name="logs" path="." />` entry since that covers the whole cache root),
+and firing the install `Intent`.
+
+**Permission flow matches section 7's battery-optimization exemption:
+request-and-forget, not tracked via callback.** If
+`packageManager.canRequestPackageInstalls()` is false, the button
+launches `Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES` via a plain
+`startActivity()` and stops — no `ActivityResultLauncher`, no
+result-checking. The user grants it in Settings, backs out, and taps
+the button again; `canRequestPackageInstalls()` is simply re-polled
+fresh at the top of the function next time, the same "ground truth
+re-checked on the next call" convention `updateBatteryOptimizationButtonVisibility()`
+already uses.
+
+**Known limitation, deliberately not checked ahead of time.** In-place
+update (installing over the existing app without an uninstall) only
+works if CI's release-signing secrets are configured
+(`docs/dev-setup.md`'s "Signing"), since Android refuses to install an
+APK signed with a different certificate over an existing app. If those
+secrets aren't set, the workflow instead signs with an ephemeral
+per-runner debug key every run, and the system installer surfaces its
+own failure after the user has already gone through this feature's
+flow. `PackageManager.getPackageArchiveInfo()` could compare signing
+certificates ahead of the install `Intent` too (`GET_SIGNING_CERTIFICATES`,
+API 28+, needing a fallback below that since `minSdk` is 26) — left
+undone as a deliberate scope cut for a manual, occasionally-tapped
+button rather than a real technical limitation; worth revisiting in
+`docs/open-questions.md` if the friction proves real in practice.

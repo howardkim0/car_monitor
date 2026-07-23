@@ -30,13 +30,13 @@ const terminator = '\r'
 // they parse successfully) are logged with their exact byte content quoted,
 // to provide visibility into exactly what arrived from the adapter.
 // Beyond this limit, no raw lines are logged, only aggregate statistics —
-// keeping logs focused on first-time startup diagnostics (DESIGN.md §12).
+// keeping logs focused on first-time startup diagnostics.
 const rawLineSampleLimit = 20
 
 // statsLogEveryNLines fires a statistics log every statsLogEveryNLines
 // lines received, reporting cumulative counts and decode percentage. This
 // provides visibility into data reception vs. decoding rates over time
-// without flooding the log with per-line noise (DESIGN.md §12).
+// without flooding the log with per-line noise.
 const statsLogEveryNLines = 100
 
 // discoveryTimeout bounds how long Session waits for "PIDs supported"
@@ -83,12 +83,11 @@ type Session struct {
 	// NewSession callers (tests included) are unaffected. Set via
 	// NewSessionWithLogger when the caller wants discovery/polling
 	// diagnostics (e.g. mobile.go wires this to LogDebug so they land
-	// in the persistent app log for real-hardware verification — see
-	// DESIGN.md section 12).
+	// in the persistent app log for real-hardware verification.
 	logf logfFunc
 
 	// linesReceived and linesDecoded track raw reception vs. successful
-	// parsing for content diagnostics (DESIGN.md §12). Feed() increments
+	// parsing for content diagnostics. Feed() increments
 	// linesReceived for every extracted line and linesDecoded whenever
 	// parseLine succeeds, enabling real-time visibility into adapter
 	// behavior: e.g. "received 300 lines but only decoded 240" reveals
@@ -122,7 +121,7 @@ func NewSession(profile vehicle.Profile, onReading func(Reading)) *Session {
 // discovery/polling lifecycle events — starting discovery, each range
 // resolving, and the final transition to the per-PID command list. This
 // is the hook mobile.go uses to route those messages into the persistent
-// app log for real-hardware ELM327 verification (DESIGN.md section 12).
+// app log for real-hardware ELM327 verification.
 func NewSessionWithLogger(profile vehicle.Profile, onReading func(Reading), logf logfFunc) *Session {
 	s := &Session{
 		profile:          profile,
@@ -284,7 +283,7 @@ func InitCommands() []string {
 // call and the '\n' arrives at the start of the next.
 //
 // Content diagnostics: Feed tracks raw reception and successful parsing
-// rates for visibility into adapter behavior (DESIGN.md §12). The first
+// rates for visibility into adapter behavior. The first
 // rawLineSampleLimit lines have their exact byte content logged, and
 // every statsLogEveryNLines lines a cumulative log reports received vs.
 // decoded counts and the decode percentage.
