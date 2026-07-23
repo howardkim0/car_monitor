@@ -373,7 +373,9 @@ real manifest, so this catches the gap without needing a real host.
 ## Trend / anomaly detection
 
 **False "alternator failed" CRITICAL alert risk from a normal auto
-idle-stop restart**, found by replaying real fleet data
+idle-stop restart** (`4b667cd`:
+https://github.com/howardkim0/car_monitor/commit/4b667cd), found by
+replaying real fleet data
 (`car_monitor_logs`, see `CLAUDE.md`) at full timestamp resolution
 rather than reading it in aggregate. Symptom: `internal/monitor`'s
 `Evaluate` computed a single "latest RPM" value (independently of which

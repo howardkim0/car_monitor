@@ -39,6 +39,14 @@ the story of how a bug was found and why it happened lives, cross-
 referenced from the relevant `DESIGN.md` section rather than repeated
 there.
 
+Once the fix is actually committed, note the commit hash *and* a link
+to it (`https://github.com/howardkim0/car_monitor/commit/<hash>`) in
+the entry — add this once the hash exists rather than leaving it as a
+placeholder or skipping it if the entry was drafted before committing.
+If the defect traces back to a `docs/open-questions.md` item or another
+tracked GitHub issue, link that issue too (URL, number, and title), not
+just the commit.
+
 ## DESIGN.md is timeless
 
 It describes the app as it exists now, not a changelog of any session,
