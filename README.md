@@ -40,6 +40,10 @@ For the full architecture, extensibility points, and design rationale, see
     §7](DESIGN.md#7-background-execution-model) and
     [docs/plan-google-drive-backup.md](docs/plan-google-drive-backup.md)
     for how each works.
+- **Check for Updates** — checks GitHub Releases for a newer
+  debug-signed build than the one currently running and offers to
+  install it in place. See [DESIGN.md
+  §12](DESIGN.md#12-check-for-updates).
 
 ## Install
 
@@ -54,6 +58,12 @@ adb install -r car-monitor-debug.apk
 Or download `car-monitor-debug.apk` from the [Releases
 page](../../releases) directly and install it on-device. See
 [docs/dev-setup.md](docs/dev-setup.md) for signing details.
+
+Already have a build installed? Settings → "Check for Updates" does
+this in-app — but only for an in-place *update* over a build already
+installed via one of the methods above (see [DESIGN.md
+§12](DESIGN.md#12-check-for-updates)); a first-time install still needs
+one of them.
 
 ## Build from source
 

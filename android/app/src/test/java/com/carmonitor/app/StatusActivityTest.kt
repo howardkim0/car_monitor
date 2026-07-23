@@ -2,9 +2,11 @@ package com.carmonitor.app
 
 import android.app.NotificationManager
 import android.content.Context
+import java.io.File
 import org.junit.After
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -213,6 +215,100 @@ class StatusActivityTest {
             android.view.View.GONE,
             settingsGroup.visibility
         )
+    }
+
+    @Test
+    fun `Check for Updates button is present inside settingsGroup`() {
+        val activity = newActivity()
+        val settingsGroup = activity.findViewById<android.view.ViewGroup>(R.id.settingsGroup)
+        val button = activity.findViewById<android.widget.Button>(R.id.checkForUpdatesButton)
+        assertNotNull("checkForUpdatesButton should exist", button)
+        assertTrue(
+            "checkForUpdatesButton should be a descendant of settingsGroup",
+            isDescendantOf(button, settingsGroup)
+        )
+    }
+
+    @Test
+    fun `Check for Updates launches Unknown Sources settings when install permission is missing`() {
+        // stoppedByUser=true (same isolation as the auto-check test below)
+        // so onCreate's own unrelated Bluetooth requestPermissions.launch()
+        // doesn't also enqueue a startedActivity — this test should only
+        // ever see the one this button click causes, not rely on
+        // nextStartedActivity's undocumented most-recent-wins ordering
+        // between the two.
+        val app = RuntimeEnvironment.getApplication()
+        val prefs = app.getSharedPreferences("car_monitor_prefs", Context.MODE_PRIVATE)
+        prefs.edit().putBoolean("stoppedByUser", true).apply()
+
+        val activity = newActivity()
+        shadowOf(activity.packageManager).setCanRequestPackageInstalls(false)
+
+        activity.findViewById<android.widget.Button>(R.id.checkForUpdatesButton).performClick()
+
+        val started = shadowOf(activity).nextStartedActivity
+        assertNotNull("missing install permission should launch a settings Intent", started)
+        assertEquals(android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, started?.action)
+    }
+
+    @Test
+    fun `automatic on-launch update check never prompts for install permission`() {
+        // The automatic check (StatusActivity.autoCheckForUpdates(), run
+        // unconditionally from onCreate) must stay completely silent when
+        // the install permission is missing — only the manual button may
+        // send the user to Settings. Since the permission check happens
+        // synchronously before any coroutine is launched, this is
+        // deterministic with no need to wait on the IO dispatcher.
+        //
+        // stoppedByUser is set first (same technique as "Test Alert button
+        // posts a notification even when stopped by user" above) so onCreate's
+        // own unrelated Bluetooth requestPermissions.launch() call — which
+        // fires whenever the activity isn't in the stopped state — doesn't
+        // show up as a false positive via nextStartedActivity.
+        val app = RuntimeEnvironment.getApplication()
+        shadowOf(app.packageManager).setCanRequestPackageInstalls(false)
+        val prefs = app.getSharedPreferences("car_monitor_prefs", Context.MODE_PRIVATE)
+        prefs.edit().putBoolean("stoppedByUser", true).apply()
+
+        val activity = newActivity()
+
+        assertNull(
+            "auto-check must not launch a settings intent unprompted",
+            shadowOf(activity).nextStartedActivity
+        )
+    }
+
+    @Test
+    fun `showUpdateAvailableDialog does not crash when the Activity is already destroyed`() {
+        // Regression test: scope.cancel() in onDestroy() can't actually
+        // interrupt AppUpdater's plain blocking network calls (Kotlin
+        // coroutine cancellation is cooperative, checked only at
+        // suspension points), so a check already in flight when the user
+        // backs out can still post to runOnUiThread after the Activity is
+        // gone. showUpdateAvailableDialog()'s isFinishing/isDestroyed
+        // guard (plus a try/catch backstop) must prevent a
+        // WindowManager.BadTokenException / leaked-window crash here.
+        // Not added to `controllers` — destroyed directly below, and
+        // tearDown() double-destroying it crashes Robolectric's fragment
+        // teardown with an unrelated NPE (same precedent as "destroying
+        // the activity cancels the export coroutine scope" above).
+        val controller = Robolectric.buildActivity(StatusActivity::class.java).create().start()
+        val activity = controller.get()
+        val file = File.createTempFile("test-update", ".apk")
+
+        controller.destroy()
+
+        // Must not throw.
+        activity.showUpdateAvailableDialog(file, 999)
+    }
+
+    private fun isDescendantOf(view: android.view.View, group: android.view.ViewGroup): Boolean {
+        var parent = view.parent
+        while (parent != null) {
+            if (parent === group) return true
+            parent = (parent as? android.view.View)?.parent
+        }
+        return false
     }
 
     @Test

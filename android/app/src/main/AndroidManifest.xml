@@ -18,6 +18,9 @@
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <!-- INTERNET is needed for git backup to car_monitor_logs.git; see DESIGN.md section 8. -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Lets "Check for Updates" (StatusActivity, DESIGN.md section 12) prompt
+         installing a newer debug-signed APK downloaded from GitHub Releases. -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <application
         android:name=".CarMonitorApplication"

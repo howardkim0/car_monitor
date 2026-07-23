@@ -53,6 +53,7 @@ class StatusActivity : AppCompatActivity(), ObdForegroundService.StatusListener 
     private lateinit var viewLogsButton: Button
     private lateinit var copySshKeyButton: Button
     private lateinit var testAlertButton: Button
+    private lateinit var checkForUpdatesButton: Button
     private lateinit var gitPushButton: Button
     private lateinit var backupToDriveButton: Button
     private lateinit var settingsButton: Button
@@ -161,6 +162,8 @@ class StatusActivity : AppCompatActivity(), ObdForegroundService.StatusListener 
         copySshKeyButton.setOnClickListener { copySshKeyToClipboard() }
         testAlertButton = findViewById(R.id.testAlertButton)
         testAlertButton.setOnClickListener { showTestAlert() }
+        checkForUpdatesButton = findViewById(R.id.checkForUpdatesButton)
+        checkForUpdatesButton.setOnClickListener { checkForUpdates() }
         gitPushButton = findViewById(R.id.gitPushButton)
         gitPushButton.setOnClickListener { gitPush() }
         backupToDriveButton = findViewById(R.id.backupToDriveButton)
@@ -193,6 +196,8 @@ class StatusActivity : AppCompatActivity(), ObdForegroundService.StatusListener 
                 }
             }
         }
+
+        autoCheckForUpdates()
 
         stoppedByUser = MonitoringPrefs.isStoppedByUser(this)
         if (stoppedByUser) {
@@ -374,6 +379,140 @@ class StatusActivity : AppCompatActivity(), ObdForegroundService.StatusListener 
                 }
             }
         }
+    }
+
+    /**
+     * Checks GitHub Releases for a newer debug-signed build (DESIGN.md
+     * section 12) and shows the available-update dialog if AppUpdater
+     * reports one. Permission is checked first, before any network
+     * activity, so a missing grant doesn't cost a wasted fetch/download.
+     * User-triggered path: unlike autoCheckForUpdates(), always reports
+     * a result (checking/up-to-date/failed toasts), and re-shows the
+     * dialog even for a build the user already dismissed once.
+     */
+    private fun checkForUpdates() {
+        if (!packageManager.canRequestPackageInstalls()) {
+            Toast.makeText(this, getString(R.string.check_for_updates_permission_needed), Toast.LENGTH_LONG).show()
+            startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:$packageName")))
+            return
+        }
+
+        Toast.makeText(this, getString(R.string.check_for_updates_checking), Toast.LENGTH_SHORT).show()
+        scope.launch(Dispatchers.IO) {
+            try {
+                val result = performUpdateCheck()
+                runOnUiThread {
+                    when (result) {
+                        is AppUpdater.Result.UpToDate ->
+                            Toast.makeText(this@StatusActivity, getString(R.string.check_for_updates_up_to_date), Toast.LENGTH_SHORT).show()
+                        is AppUpdater.Result.UpdateAvailable ->
+                            showUpdateAvailableDialog(result.apkFile, result.downloadedVersionCode)
+                        is AppUpdater.Result.Failed -> {
+                            Mobile.logError("Update check failed: ${result.reason}")
+                            Toast.makeText(this@StatusActivity, getString(R.string.check_for_updates_failed), Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                Mobile.logError("Update check failed: $e")
+                runOnUiThread {
+                    Toast.makeText(this@StatusActivity, getString(R.string.check_for_updates_failed), Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+    }
+
+    /**
+     * The automatic, on-launch counterpart to checkForUpdates() (DESIGN.md
+     * section 12): silent unless there's actually a new, not-previously-
+     * dismissed build to offer — no permission-request settings intent, no
+     * "checking"/"up to date"/"failed" toasts, since none of that is
+     * useful noise on every single app open. A missing install permission
+     * is simply left for the manual button to surface.
+     */
+    private fun autoCheckForUpdates() {
+        if (!packageManager.canRequestPackageInstalls()) return
+        scope.launch(Dispatchers.IO) {
+            try {
+                val result = performUpdateCheck()
+                if (result is AppUpdater.Result.UpdateAvailable &&
+                    !UpdateDismissalPrefs.isDismissed(this@StatusActivity, result.downloadedVersionCode)
+                ) {
+                    runOnUiThread { showUpdateAvailableDialog(result.apkFile, result.downloadedVersionCode) }
+                }
+            } catch (e: Exception) {
+                Mobile.logError("Automatic update check failed: $e")
+            }
+        }
+    }
+
+    /**
+     * A fresh, uniquely-named destination per call — not a fixed
+     * filename — so the manual button and the automatic on-launch check
+     * can never race each other into interleaved/truncated writes to the
+     * same file if both happen to be in flight at once (e.g. the user
+     * expands Settings and taps the button while the auto-check's own
+     * network round trip is still running).
+     */
+    private fun performUpdateCheck(): AppUpdater.Result {
+        val destination = File.createTempFile("car-monitor-update", ".apk", cacheDir)
+        @Suppress("DEPRECATION")
+        val installedVersionCode = packageManager.getPackageInfo(packageName, 0).versionCode
+        return AppUpdater.checkForUpdate(
+            expectedPackageName = packageName,
+            installedVersionCode = installedVersionCode,
+            destination = destination,
+            fetch = AppUpdater::defaultFetch,
+            download = AppUpdater::defaultDownload,
+            readApkInfo = ::readApkInfo,
+        )
+    }
+
+    @Suppress("DEPRECATION")
+    private fun readApkInfo(file: File): AppUpdater.ApkInfo? =
+        packageManager.getPackageArchiveInfo(file.path, 0)?.let {
+            AppUpdater.ApkInfo(it.packageName, it.versionCode)
+        }
+
+    /**
+     * "Dismiss" persists the versionCode so this same build won't
+     * auto-prompt again. Guarded against a destroyed/finishing Activity:
+     * this is reached from a background coroutine's runOnUiThread
+     * callback (both the manual button's IO dispatch and the automatic
+     * on-launch check), and Kotlin coroutine cancellation is cooperative
+     * — scope.cancel() in onDestroy() can't interrupt AppUpdater's plain
+     * blocking network calls mid-flight, so a check already past its
+     * last suspension point still runs to completion and posts here even
+     * if the user backed out of the app while it was in flight. The
+     * isFinishing/isDestroyed check closes the common case; the
+     * try/catch is a backstop for the remaining race between that check
+     * and show() itself.
+     */
+    @VisibleForTesting
+    internal fun showUpdateAvailableDialog(apkFile: File, versionCode: Int) {
+        if (isFinishing || isDestroyed) return
+        try {
+            AlertDialog.Builder(this)
+                .setTitle(getString(R.string.check_for_updates_available_title))
+                .setMessage(getString(R.string.check_for_updates_available_message, versionCode))
+                .setPositiveButton(getString(R.string.check_for_updates_install_button)) { _, _ -> promptInstall(apkFile) }
+                .setNegativeButton(getString(R.string.check_for_updates_dismiss_button)) { _, _ ->
+                    UpdateDismissalPrefs.setDismissed(this, versionCode)
+                }
+                .show()
+        } catch (e: Exception) {
+            Mobile.logError("Failed to show update-available dialog: $e")
+        }
+    }
+
+    private fun promptInstall(apkFile: File) {
+        val uri = FileProvider.getUriForFile(this, "${packageName}.fileprovider", apkFile)
+        val installIntent = Intent(Intent.ACTION_VIEW).apply {
+            setDataAndType(uri, "application/vnd.android.package-archive")
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        Toast.makeText(this, getString(R.string.check_for_updates_installing), Toast.LENGTH_SHORT).show()
+        startActivity(installIntent)
     }
 
     private fun copySshKeyToClipboard() {
