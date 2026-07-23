@@ -17,8 +17,8 @@ For v1:
 - Bluetooth device defaults to one hardcoded MAC (a classic SPP ELM327
   dongle) unless the user pairs/selects another in-app (section 5.1) — no
   rebuild needed either way.
-- Vehicle profile is hardcoded to a 2023 Subaru Forester, with no in-app
-  override yet.
+- Vehicle profile defaults to a 2023 Subaru Forester, selectable in-app
+  via a Model Year → Make → Model → Trim picker (section 5.3).
 
 Both sit behind small interfaces so more devices/vehicles can be added
 without restructuring the app.
@@ -354,21 +354,16 @@ type PID struct {
 type Profile struct {
     Make, Model string
     Year        int
+    Trim        string // "" when this Make/Model/Year has only one variant
     PIDs        []PID
 }
 
-var subaruForester2023 = Profile{
-    Make: "Subaru", Model: "Forester", Year: 2023,
-    PIDs: []PID{
-        {Code: 0x04, Mode: ModeCurrentData, Name: "Calculated Engine Load", Unit: "%", Decode: decodePercentOfByte},
-        {Code: 0x05, Mode: ModeCurrentData, Name: "Coolant Temperature", Unit: "C", Decode: decodeByteMinus40},
-        // ... 30 more standard SAE J1979 Mode 01 PIDs — see vehicle.go for
-        // the full, current list; not duplicated here since it would just
-        // drift out of sync with the code.
-    },
+var registry = []Profile{
+    subaruForester2023,
+    // a second Profile is additive — see Years/Makes/Models/Trims below
 }
 
-func Default() Profile { return subaruForester2023 }
+func Default() Profile { return registry[0] }
 ```
 
 Targets the NA FB25 2.5L Forester specifically, not the turbo FA24 — SAE
@@ -395,21 +390,92 @@ are supported — or after a 5s timeout, falling back to requesting
 everything. Go owns the entire phase transition; Kotlin's `writeLoop()`
 just keeps polling `Commands()` blindly. Only covers Mode 01 (the only
 mode this app requests) — a future mode would need its own discovery
-handling.
+handling (`docs/plan-multi-vehicle-support.md`'s Phase 2 proposes Mode
+22 for the manufacturer-specific PIDs standard Mode 01 doesn't expose on
+every ECU — see `docs/defects.md`'s "Trend / anomaly detection" entry
+for the real gap that motivated it).
 
-Same extensibility pattern as devices: one hardcoded `Default()` today,
-but the rest of the app only talks to `vehicle.Profile`. A second car is
-an additive `Profile` value plus a selection mechanism — no changes to
-`obd2` or Kotlin. Could move to a bundled JSON/YAML asset later so
-profiles are editable without a rebuild; not needed for v1.
+**`registry` replaces the single hardcoded profile.** Adding a vehicle
+is an additive `Profile` value plus, if it isn't the only variant for
+its Make/Model/Year, a `Trim` label — no changes to `obd2` or Kotlin.
+`Years()`, `Makes(year)`, `Models(year, make)`, and `Trims(year, make,
+model)` each list the distinct values one drill-down level down from the
+last (section 5.3); `Find(year, make, model, trim)` resolves a
+fully-specified selection back to its `Profile`. `registry` today still
+holds only the one real, hardware-verified Forester profile —
+deliberately: unlike the SAE-standard PIDs above (universally correct by
+formula, filtered per-ECU by discovery regardless of what's listed),
+claiming a specific *Make/Model/Year* is supported is a claim that
+vehicle's PID list is actually right, which hasn't been verified for
+anything but the Forester yet. More profiles are added incrementally as
+each is curated (`docs/plan-multi-vehicle-support.md`).
 
-### 5.3 Selecting device/vehicle without a rebuild
+### 5.3 Selecting a vehicle in-app
 
-`device.Default()` is runtime-overridable via 5.1's persisted-selection
-mechanism. `vehicle.Default()` is still a hardcoded function with no
-config file or UI (`docs/open-questions.md`) — the interface exists so
-swapping it out later (env var, JSON asset, extending the device-picker
-UI) is a localized change.
+`vehicle.SelectedOrDefault(dir)` mirrors device selection's
+persisted-choice pattern (section 5.1) exactly — `SaveSelected`/
+`LoadSelected`, a plain-text `selected_vehicle.txt`
+("year\nmake\nmodel\ntrim\n"), same philosophy as `internal/applog`
+(section 6.2). `mobile.NewSession` resolves this once per Bluetooth
+reconnect (a fresh `Session` per connection, same lifecycle device
+selection already relies on), so a vehicle change takes effect on the
+next reconnect without an app restart.
+
+Ten JNI wrappers back the drill-down picker below — gomobile can't
+return a `[]string`/slice-of-`Profile` cleanly (`mobile.go`'s header
+comment), so each drill-down level gets a `Count`/`At` pair, the same
+convention as `Commands()`/`CommandAt(i)` (section 5.2's PID discovery)
+rather than a new one: `VehicleYearCount()`/`VehicleYearAt(i)`,
+`VehicleMakeCount(year)`/`VehicleMakeAt(year, i)`,
+`VehicleModelCount(year, make)`/`VehicleModelAt(year, make, i)`,
+`VehicleTrimCount(year, make, model)`/`VehicleTrimAt(year, make, model,
+i)`, plus `SetSelectedVehicle(storageDir, year, make, model, trim)` and
+`SelectedVehicleSummary(storageDir)` (a display string like `"2023
+Subaru Forester"` for the confirm step and settings display).
+
+**`VehiclePickerActivity`** (Kotlin, phone-only for now — no Android
+Auto equivalent yet, unlike the device picker's `DeviceScanActivity`/
+`PairScannerScreen` pair) is a single Activity managing four sequential
+steps — Model Year, Make, Model, Trim/Engine — plus a confirmation
+screen, rather than four chained Activities: this codebase has no
+Fragment/ViewPager usage anywhere (section 3), so an internal `step`
+index rebuilding one `LinearLayout` of `Button` rows per step (the same
+dynamically-built-rows pattern as `DeviceScanActivity.addDeviceRow`)
+stays consistent with the rest of the app instead of introducing a new
+navigation pattern for one screen. The **Trim step is skipped** when a
+Make/Model/Year combination has only one `Profile` (`Trim == ""`) —
+matching how consumer OBD2 apps handle single-variant vehicles
+(`docs/plan-multi-vehicle-support.md` section 2) — landing straight on
+Confirm instead. System back navigation steps back through the wizard
+one level at a time, matching a normal Activity back stack everywhere
+except the first step, where it exits like any other entry Activity.
+
+`VehicleMobile`/`RealVehicleMobile`/`FakeVehicleMobile` mirror
+`ObdMobile`'s three-way seam (section 10) for a different reason than
+`ObdConnectionEngine`'s: unlike `DeviceScanActivity` (whose device list
+comes entirely from Android's own `BluetoothAdapter`, `Mobile` touched
+only at the point of final selection), every list the vehicle picker
+renders comes directly from a `Mobile` call — without a seam, none of
+`VehiclePickerActivity`'s actual logic would be unit-testable under
+Robolectric at all, not even the "must not crash" bar `DeviceScanActivity`
+settles for on its own untested `Mobile.setSelectedDevice` call site.
+
+A new **"Select Vehicle"** button on the status screen's Settings group
+(beside "Pair Bluetooth OBD2 Scanners") launches `VehiclePickerActivity`
+via `registerForActivityResult`; on `RESULT_OK`, `StatusActivity` calls
+`boundService?.reconnectNow()` — same as a device-selection change
+(section 5.1) — so the next connection resolves the new
+`vehicle.SelectedOrDefault()` immediately rather than waiting for the
+Bluetooth link to drop on its own.
+
+### 5.4 Selecting device/vehicle without a rebuild
+
+`device.Default()` and, as of section 5.3, `vehicle.Default()` are both
+runtime-overridable via their own persisted-selection mechanism — no
+config file or hidden settings needed for either. `vehicle.registry`
+could move to a bundled JSON/YAML asset later so profiles are editable
+without a rebuild (`docs/plan-multi-vehicle-support.md` section 6); not
+needed while it holds a small, hand-curated list.
 
 ## 6. Storage
 
@@ -744,8 +810,9 @@ undertaking. `android/` tests target regression coverage for bugs
 actually found, not a percentage. CI reports Android coverage (Kover) as
 a build artifact; it isn't gated.
 
-`ObdConnectionEngine` (section 4) is a deliberate exception to
-"regression tests only," not a reversal of the rule above: its
+`ObdConnectionEngine` (section 4) and `VehiclePickerActivity` (section
+5.3) are deliberate exceptions to "regression tests only," for two
+different reasons, not a reversal of the rule above. `ObdConnectionEngine`'s
 connect/backoff/retry state machine is plain logic once its `ObdMobile`/
 `ObdSession`/clock dependencies are injected, so `ObdConnectionEngineTest`
 exercises it directly under `kotlinx-coroutines-test` virtual time
@@ -753,14 +820,20 @@ exercises it directly under `kotlinx-coroutines-test` virtual time
 timeout, cancellation never being swallowed as a retryable failure) —
 the same kind of case `go/` already covers at 100%, just expressed in
 Kotlin because the Bluetooth/Service APIs it drives are Kotlin-only
-(section 3). Every other `Mobile`/`Session` call site outside this one
-file (`ObdDeviceLister`, `DeviceScanActivity`, and friends) is
-unaffected and stays out of scope — none of them have a `delay()`-driven
-loop to test against virtual time, only synchronous one-shot calls
-(`docs/open-questions.md`). `BackupLoops` (section 7) gets the same
-treatment for the same reason — `BackupLoopsTest` verifies its 5-minute
-cadence and that a failed sync doesn't kill the loop, under the same
-virtual time.
+(section 3). `BackupLoops` (section 7) gets the same treatment for the
+same reason — `BackupLoopsTest` verifies its 5-minute cadence and that a
+failed sync doesn't kill the loop, under the same virtual time.
+`VehiclePickerActivity`'s reason is different: it has no `delay()`-driven
+loop, but every list it renders comes directly from a `Mobile` call
+(section 5.3) rather than from a Kotlin-only data source the way
+`DeviceScanActivity`'s device list does — without `VehicleMobile`/
+`FakeVehicleMobile`, none of the wizard's step/skip logic would be
+unit-testable at all, not just untested by choice. Every other
+`Mobile`/`Session` call site outside these three files (`ObdDeviceLister`,
+`DeviceScanActivity`, and friends) is unaffected and stays out of scope —
+each is a synchronous one-shot call layered on top of substantially
+Kotlin-only logic, with neither a virtual-time loop nor its entire
+rendered content riding on `Mobile`'s result (`docs/open-questions.md`).
 
 **Regression tests exist for bugs actually found during development**,
 per `CLAUDE.md`'s "every caught bug gets a regression test" — see
