@@ -316,6 +316,31 @@ quick glance. Fix: wrapped the whole screen in a `ScrollView`;
 buttons for space, which also stops it from being silently clipped if
 the reading list itself runs long. See `DESIGN.md` section 3.
 
+## Vehicle picker
+
+**App crashed immediately on tapping "Select Vehicle."** Symptom:
+tapping the button on the status screen killed the app outright, with
+the process restarting moments later (`app.log`'s `App started` lines
+recurring every 8-11s instead of once per real launch). Root cause:
+`VehiclePickerActivity` (added alongside the rest of the vehicle picker
+feature) was never added to `AndroidManifest.xml` — unlike
+`DeviceScanActivity`/`LogViewerActivity`, which both have an
+`<activity>` entry. `StatusActivity`'s "Select Vehicle" button launches
+it via an explicit `Intent`, which Android resolves against the
+manifest at launch time; an undeclared target throws
+`ActivityNotFoundException`, uncaught, killing the process.
+`VehiclePickerActivityTest`'s existing coverage all builds the Activity
+directly via `Robolectric.buildActivity()`, which constructs the class
+without ever consulting the manifest — the same category of harness gap
+as the Android Auto section's `CarAppService.getAppInfo()` miss below,
+just for explicit-Intent resolution instead of Car App Library
+discovery. Fix: added the missing `<activity android:name=".VehiclePickerActivity" .../>`
+entry. Regression test: `VehiclePickerActivityTest`'s "manifest declares
+VehiclePickerActivity" resolves the Activity via
+`PackageManager.getActivityInfo()` against Robolectric's real merged
+manifest, the same shape as `CarMonitorCarAppServiceTest`'s
+`minCarApiLevel` assertion below.
+
 ## Android build / release
 
 **CI-built debug APKs couldn't be installed over a previous install**

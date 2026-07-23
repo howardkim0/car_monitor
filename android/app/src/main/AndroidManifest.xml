@@ -58,6 +58,11 @@
             android:exported="false"
             android:label="@string/view_logs_button" />
 
+        <activity
+            android:name=".VehiclePickerActivity"
+            android:exported="false"
+            android:label="@string/select_vehicle_button" />
+
         <service
             android:name=".ObdForegroundService"
             android:exported="false"

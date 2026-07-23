@@ -1,5 +1,6 @@
 package com.carmonitor.app
 
+import android.content.ComponentName
 import android.widget.Button
 import android.widget.LinearLayout
 import org.junit.After
@@ -10,6 +11,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.android.controller.ActivityController
 import org.robolectric.annotation.Config
@@ -17,6 +19,32 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class VehiclePickerActivityTest {
+
+    // Robolectric.buildActivity() constructs the Activity directly and
+    // doesn't consult AndroidManifest.xml, so every other test in this file
+    // would pass even if the Activity were never declared there -- which is
+    // exactly what happened (StatusActivity's "Select Vehicle" button threw
+    // ActivityNotFoundException on a real device, an explicit-Intent launch
+    // Robolectric's buildActivity() never exercises). This is the only test
+    // that actually resolves the manifest, the same gap-closing shape as
+    // CarMonitorCarAppServiceTest's minCarApiLevel meta-data assertion.
+    @Test
+    fun `manifest declares VehiclePickerActivity`() {
+        val context = RuntimeEnvironment.getApplication()
+
+        val info = context.packageManager.getActivityInfo(
+            ComponentName(context, VehiclePickerActivity::class.java),
+            0
+        )
+
+        assertNotNull(
+            "VehiclePickerActivity missing from AndroidManifest.xml -- " +
+                "StatusActivity's \"Select Vehicle\" button launches it via an " +
+                "explicit Intent, which throws ActivityNotFoundException without " +
+                "this declaration",
+            info
+        )
+    }
 
     private val controllers = mutableListOf<ActivityController<VehiclePickerActivity>>()
 
