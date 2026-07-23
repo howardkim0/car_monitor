@@ -200,56 +200,93 @@ func CheckCoolantTemp(times []time.Time, temps []float64, runTimeSec float64) An
 	}
 }
 
-// CheckBatteryVoltage evaluates control module voltage under charging conditions.
-func CheckBatteryVoltage(times []time.Time, voltages []float64, rpm float64) Anomaly {
+// runningRPMThreshold gates every check below on the engine actually
+// running: below this, the alternator isn't spinning fast enough to
+// charge at all, so a low reading is expected, not a fault.
+const runningRPMThreshold = 400.0
+
+// voltageSettleSeconds bounds how long a low (or high) voltage snapshot
+// is trusted as a real fault vs. ordinary post-crank alternator recovery
+// lag. Real fleet data (see docs/defects.md) shows control module
+// voltage sagging as low as 10.8V for 2-3 seconds after every auto
+// idle-stop restart, before the alternator catches up — a single
+// snapshot taken in that window looks identical to genuine alternator
+// failure by threshold alone. Requiring the engine to have been
+// continuously running for at least this long survives every observed
+// restart transient (longest observed recovery was ~3s) while still
+// catching a real failure within the next few poll cycles.
+const voltageSettleSeconds = 8.0
+
+// CheckBatteryVoltage evaluates control module voltage under charging
+// conditions. rpms is each voltage reading's paired engine RPM value at
+// (approximately) the same timestamp — not a single latest RPM value.
+// A vehicle with auto idle-stop drops RPM to 0 at every stop, and RPM
+// and voltage are never sampled at exactly the same instant; gating on
+// an RPM value computed independently of which instant a given voltage
+// reading came from is exactly how a normal restart's cranking sag gets
+// mistaken for alternator failure. Callers should pair the two series by
+// nearest timestamp (see monitor.pairSeries) before calling this.
+func CheckBatteryVoltage(times []time.Time, voltages []float64, rpms []float64) Anomaly {
 	n := len(voltages)
-	if n == 0 {
-		return Anomaly{Metric: "Control Module Voltage", Level: LevelNormal, Message: "No data", Timestamp: time.Now().UTC()}
+	if n == 0 || len(rpms) != n || len(times) != n {
+		return Anomaly{Metric: "Control Module Voltage", Level: LevelNormal, Message: "No data or mismatched RPM pairing", Timestamp: time.Now().UTC()}
 	}
 
 	latestVolt := voltages[n-1]
-	now := time.Now().UTC()
-	if n == len(times) && n > 0 {
-		now = times[n-1]
-	}
+	rpm := rpms[n-1]
+	now := times[n-1]
 
 	// Single value checks only apply when engine is running (RPM > 400)
-	if rpm > 400.0 {
-		if latestVolt < 12.0 {
-			return Anomaly{
-				Metric:    "Control Module Voltage",
-				Level:     LevelCritical,
-				Message:   fmt.Sprintf("Battery voltage is critically low while running: %.2fV (alternator failed)", latestVolt),
-				Timestamp: now,
+	if rpm > runningRPMThreshold {
+		// How long the engine has been continuously running as of now:
+		// walk back to the last time RPM was at/below the running
+		// threshold (a stop, whether ignition-off or auto idle-stop) —
+		// or, if it's been running for the whole series, to its start.
+		secondsRunning := now.Sub(times[0]).Seconds()
+		for i := n - 2; i >= 0; i-- {
+			if rpms[i] <= runningRPMThreshold {
+				secondsRunning = now.Sub(times[i]).Seconds()
+				break
 			}
 		}
-		if latestVolt < 13.0 {
-			return Anomaly{
-				Metric:    "Control Module Voltage",
-				Level:     LevelWarning,
-				Message:   fmt.Sprintf("Battery voltage is low while running: %.2fV", latestVolt),
-				Timestamp: now,
+
+		if secondsRunning >= voltageSettleSeconds {
+			if latestVolt < 12.0 {
+				return Anomaly{
+					Metric:    "Control Module Voltage",
+					Level:     LevelCritical,
+					Message:   fmt.Sprintf("Battery voltage is critically low while running: %.2fV (alternator failed)", latestVolt),
+					Timestamp: now,
+				}
 			}
-		}
-		if latestVolt > 16.0 {
-			return Anomaly{
-				Metric:    "Control Module Voltage",
-				Level:     LevelCritical,
-				Message:   fmt.Sprintf("Battery voltage is critically high: %.2fV (regulator failure)", latestVolt),
-				Timestamp: now,
+			if latestVolt < 13.0 {
+				return Anomaly{
+					Metric:    "Control Module Voltage",
+					Level:     LevelWarning,
+					Message:   fmt.Sprintf("Battery voltage is low while running: %.2fV", latestVolt),
+					Timestamp: now,
+				}
 			}
-		}
-		if latestVolt > 15.2 {
-			return Anomaly{
-				Metric:    "Control Module Voltage",
-				Level:     LevelWarning,
-				Message:   fmt.Sprintf("Battery voltage is high: %.2fV", latestVolt),
-				Timestamp: now,
+			if latestVolt > 16.0 {
+				return Anomaly{
+					Metric:    "Control Module Voltage",
+					Level:     LevelCritical,
+					Message:   fmt.Sprintf("Battery voltage is critically high: %.2fV (regulator failure)", latestVolt),
+					Timestamp: now,
+				}
+			}
+			if latestVolt > 15.2 {
+				return Anomaly{
+					Metric:    "Control Module Voltage",
+					Level:     LevelWarning,
+					Message:   fmt.Sprintf("Battery voltage is high: %.2fV", latestVolt),
+					Timestamp: now,
+				}
 			}
 		}
 
 		// Trend check: voltage decay while engine is running
-		if n >= 2 && len(times) == n {
+		if n >= 2 {
 			// Look at last 2 minutes (120 seconds)
 			windowSize := 0
 			cutoffTime := times[n-1].Add(-120 * time.Second)

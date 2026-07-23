@@ -58,9 +58,12 @@ func Evaluate(readings []obd2.Reading) []trend.Anomaly {
 	var anomalies []trend.Anomaly
 
 	// Computed once and reused below rather than re-scanning readings per
-	// check: rpm gates two checks, and latestCoolant is just coolantTemps'
-	// last element (series() already collects it in chronological order),
-	// so there's no need for a second, separate latest() scan for it.
+	// check: rpm gates the catalytic converter check below, and
+	// latestCoolant is just coolantTemps' last element (series() already
+	// collects it in chronological order), so there's no need for a
+	// second, separate latest() scan for it. Battery voltage does NOT
+	// reuse this scalar — see the pairSeries call below and
+	// trend.CheckBatteryVoltage's doc comment for why.
 	rpm := latest(readings, engineRPM)
 
 	coolantTimes, coolantTemps := series(readings, coolantTemp)
@@ -71,8 +74,13 @@ func Evaluate(readings []obd2.Reading) []trend.Anomaly {
 		anomalies = append(anomalies, trend.CheckCoolantTemp(coolantTimes, coolantTemps, runTime))
 	}
 
-	if times, volts := series(readings, controlModuleVoltage); len(volts) > 0 {
-		anomalies = append(anomalies, trend.CheckBatteryVoltage(times, volts, rpm))
+	// Paired by nearest timestamp, not each independently "latest" —
+	// a vehicle with auto idle-stop drops RPM to 0 at every stop, so an
+	// RPM value from a different instant than the voltage reading it
+	// gates can make a normal restart's cranking sag look like alternator
+	// failure. See docs/defects.md and trend.CheckBatteryVoltage.
+	if times, volts, rpms := pairSeries(readings, controlModuleVoltage, engineRPM); len(volts) > 0 {
+		anomalies = append(anomalies, trend.CheckBatteryVoltage(times, volts, rpms))
 	}
 
 	if times, stft, ltft := pairSeries(readings, shortTermFuelTrimBank1, longTermFuelTrimBank1); len(times) > 0 {

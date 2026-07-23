@@ -188,9 +188,11 @@ func TestEvaluateCoolantOverheat(t *testing.T) {
 	}
 }
 
-func TestEvaluateBatteryLowVoltageUsesLatestRPM(t *testing.T) {
+func TestEvaluateBatteryLowVoltageUsesPairedRPM(t *testing.T) {
 	t0 := time.Now()
 	readings := []obd2.Reading{
+		reading(engineRPM, 800, t0.Add(-10*time.Second)),
+		reading(controlModuleVoltage, 14.0, t0.Add(-10*time.Second)),
 		reading(engineRPM, 800, t0),
 		reading(controlModuleVoltage, 11.5, t0),
 	}
@@ -206,7 +208,33 @@ func TestEvaluateBatteryLowVoltageUsesLatestRPM(t *testing.T) {
 		t.Fatalf("Evaluate() = %+v, want a Control Module Voltage result", got)
 	}
 	if batteryAnomaly.Level != trend.LevelCritical {
-		t.Errorf("battery anomaly level = %v, want LevelCritical (rpm=800 > 400, volts=11.5 < 12.0)", batteryAnomaly.Level)
+		t.Errorf("battery anomaly level = %v, want LevelCritical (rpm=800 > 400 for 10s, volts=11.5 < 12.0)", batteryAnomaly.Level)
+	}
+}
+
+// TestEvaluateBatteryVoltageIgnoresRestartTransient guards against the
+// false "alternator failed" alert real fleet data exposed: this
+// vehicle's auto idle-stop drops RPM to 0 at every stop, and control
+// module voltage sags well below 12V for a couple of seconds after each
+// restart while the alternator catches up. Before the fix, Evaluate()
+// paired whichever RPM reading happened to be independently "latest" in
+// the whole day's data with whichever voltage reading was independently
+// "latest" — not matched by timestamp — so a mismatched pairing exactly
+// like this one fired a false CRITICAL. See docs/defects.md.
+func TestEvaluateBatteryVoltageIgnoresRestartTransient(t *testing.T) {
+	t0 := time.Now()
+	readings := []obd2.Reading{
+		reading(engineRPM, 0, t0), // stopped (idle-stop)
+		reading(controlModuleVoltage, 14.0, t0),
+		reading(engineRPM, 900, t0.Add(3*time.Second)),              // just restarted
+		reading(controlModuleVoltage, 10.82, t0.Add(3*time.Second)), // cranking sag, still recovering
+	}
+
+	got := Evaluate(readings)
+	for _, a := range got {
+		if a.Metric == "Control Module Voltage" && a.Level != trend.LevelNormal {
+			t.Errorf("battery anomaly level = %v, want LevelNormal (only 3s since restart, below settle window): %+v", a.Level, a)
+		}
 	}
 }
 

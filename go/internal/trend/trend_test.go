@@ -173,59 +173,89 @@ func TestCheckBatteryVoltage(t *testing.T) {
 	t0 := time.Now()
 
 	// Empty case
-	if a := CheckBatteryVoltage(nil, nil, 0); a.Level != LevelNormal || a.Message != "No data" {
+	if a := CheckBatteryVoltage(nil, nil, nil); a.Level != LevelNormal || a.Message != "No data or mismatched RPM pairing" {
 		t.Errorf("unexpected empty case: %+v", a)
 	}
 
 	// Engine off (RPM = 0) should bypass running checks
-	if a := CheckBatteryVoltage([]time.Time{t0}, []float64{11.8}, 0); a.Level != LevelNormal {
+	if a := CheckBatteryVoltage([]time.Time{t0}, []float64{11.8}, []float64{0}); a.Level != LevelNormal {
 		t.Errorf("expected LevelNormal for resting battery voltage, got %+v", a)
 	}
 
-	// Engine running, critically low voltage
-	if a := CheckBatteryVoltage([]time.Time{t0}, []float64{11.5}, 800); a.Level != LevelCritical {
+	// Engine already running well past the settle window (see below),
+	// critically low voltage
+	longRun := []time.Time{t0.Add(-10 * time.Second), t0}
+	longRunRPM := []float64{800, 800}
+	if a := CheckBatteryVoltage(longRun, []float64{14.0, 11.5}, longRunRPM); a.Level != LevelCritical {
 		t.Errorf("expected LevelCritical for running low volt, got %+v", a)
 	}
 
-	// Engine running, low voltage warning
-	if a := CheckBatteryVoltage([]time.Time{t0}, []float64{12.5}, 800); a.Level != LevelWarning {
+	// Engine already running well past the settle window, low voltage warning
+	if a := CheckBatteryVoltage(longRun, []float64{14.0, 12.5}, longRunRPM); a.Level != LevelWarning {
 		t.Errorf("expected LevelWarning for running low volt, got %+v", a)
 	}
 
-	// Engine running, critically high voltage
-	if a := CheckBatteryVoltage([]time.Time{t0}, []float64{16.5}, 800); a.Level != LevelCritical {
+	// Engine already running well past the settle window, critically high voltage
+	if a := CheckBatteryVoltage(longRun, []float64{14.0, 16.5}, longRunRPM); a.Level != LevelCritical {
 		t.Errorf("expected LevelCritical for overcharging, got %+v", a)
 	}
 
-	// Engine running, high voltage warning
-	if a := CheckBatteryVoltage([]time.Time{t0}, []float64{15.4}, 800); a.Level != LevelWarning {
+	// Engine already running well past the settle window, high voltage warning
+	if a := CheckBatteryVoltage(longRun, []float64{14.0, 15.4}, longRunRPM); a.Level != LevelWarning {
 		t.Errorf("expected LevelWarning for high volt, got %+v", a)
 	}
 
-	// Engine running, normal voltage
-	if a := CheckBatteryVoltage([]time.Time{t0}, []float64{14.0}, 800); a.Level != LevelNormal {
+	// Engine already running well past the settle window, normal voltage
+	if a := CheckBatteryVoltage(longRun, []float64{14.0, 14.0}, longRunRPM); a.Level != LevelNormal {
 		t.Errorf("expected LevelNormal, got %+v", a)
+	}
+
+	// Regression: real fleet data shows control module voltage sagging as
+	// low as 10.8V for a couple of seconds after every auto idle-stop
+	// restart (RPM 0 -> running), before the alternator catches up. A
+	// snapshot taken during that window must not be mistaken for
+	// "alternator failed" just because it arrives right after RPM
+	// crosses the running threshold. See docs/defects.md.
+	justRestarted := []time.Time{t0.Add(-3 * time.Second), t0}
+	restartRPM := []float64{0, 800} // stopped 3s ago, now running
+	if a := CheckBatteryVoltage(justRestarted, []float64{14.0, 10.82}, restartRPM); a.Level != LevelNormal {
+		t.Errorf("expected LevelNormal (only 3s since restart, below settle window), got %+v", a)
+	}
+
+	// A real failure occurring shortly after a restart is still caught
+	// once the engine has been running for at least voltageSettleSeconds.
+	pastSettle := []time.Time{
+		t0,
+		t0.Add(1 * time.Second),
+		t0.Add(9 * time.Second), // 9s since the stop at index 0, past the 8s settle window
+	}
+	pastSettleRPM := []float64{0, 900, 900}
+	if a := CheckBatteryVoltage(pastSettle, []float64{14.0, 13.9, 11.4}, pastSettleRPM); a.Level != LevelCritical {
+		t.Errorf("expected LevelCritical (9s since restart, past settle window), got %+v", a)
 	}
 
 	// Steady decay warning
 	times := make([]time.Time, 11)
 	voltages := make([]float64, 11)
+	rpms := make([]float64, 11)
 	times[0] = t0
 	voltages[0] = 14.0
+	rpms[0] = 800
 	tStart := t0.Add(150 * time.Second)
 	for i := 1; i < 11; i++ {
 		times[i] = tStart.Add(time.Duration(i*10) * time.Second)
 		voltages[i] = 14.5 - float64(i)*0.14 // drops to 13.1V at i=10 (delta = 1.4V over 90s)
+		rpms[i] = 800
 	}
-	if a := CheckBatteryVoltage(times, voltages, 800); a.Level != LevelWarning || !strings.Contains(a.Message, "steadily decaying") {
+	if a := CheckBatteryVoltage(times, voltages, rpms); a.Level != LevelWarning || !strings.Contains(a.Message, "steadily decaying") {
 		t.Errorf("expected decay warning, got %+v", a)
 	}
 
-	// Decay warning bypassed if latest voltage is high (e.g. 13.5V still)
+	// Decay warning bypassed if latest voltage is high (e.g. 13.6V still)
 	for i := 1; i < 11; i++ {
 		voltages[i] = 14.5 - float64(i)*0.09 // drops to 13.6V
 	}
-	if a := CheckBatteryVoltage(times, voltages, 800); a.Level != LevelNormal {
+	if a := CheckBatteryVoltage(times, voltages, rpms); a.Level != LevelNormal {
 		t.Errorf("expected normal (latest volt still high enough), got %+v", a)
 	}
 
@@ -234,26 +264,33 @@ func TestCheckBatteryVoltage(t *testing.T) {
 	for i := 0; i < 11; i++ {
 		stableVolts[i] = 13.1
 	}
-	if a := CheckBatteryVoltage(times, stableVolts, 800); a.Level != LevelNormal {
+	if a := CheckBatteryVoltage(times, stableVolts, rpms); a.Level != LevelNormal {
 		t.Errorf("expected normal for stable 13.1V, got %+v", a)
 	}
 
-	// Branch coverage: mismatched length between times and voltages (len(times) != len(voltages))
-	if a := CheckBatteryVoltage([]time.Time{t0}, []float64{14.0, 14.1}, 800); a.Level != LevelNormal {
-		t.Errorf("expected normal (mismatched length bypasses trend), got %+v", a)
+	// Branch coverage: mismatched length between times and voltages
+	if a := CheckBatteryVoltage([]time.Time{t0}, []float64{14.0, 14.1}, []float64{800, 800}); a.Level != LevelNormal {
+		t.Errorf("expected normal (mismatched times length bypasses check), got %+v", a)
+	}
+
+	// Branch coverage: mismatched length between rpms and voltages
+	if a := CheckBatteryVoltage([]time.Time{t0, t0}, []float64{14.0, 14.1}, []float64{800}); a.Level != LevelNormal {
+		t.Errorf("expected normal (mismatched rpms length bypasses check), got %+v", a)
 	}
 
 	// Branch coverage: windowSize < 5
 	shortTimes := []time.Time{t0, t0.Add(5 * time.Second)}
 	shortVolts := []float64{14.0, 13.9}
-	if a := CheckBatteryVoltage(shortTimes, shortVolts, 800); a.Level != LevelNormal {
+	shortRPM := []float64{800, 800}
+	if a := CheckBatteryVoltage(shortTimes, shortVolts, shortRPM); a.Level != LevelNormal {
 		t.Errorf("expected normal (windowSize < 5), got %+v", a)
 	}
 
 	// Branch coverage: CalculateSlope error (identical timestamps)
 	dupTimes := []time.Time{t0, t0, t0, t0, t0}
 	dupVolts := []float64{14.0, 14.0, 14.0, 14.0, 14.0}
-	if a := CheckBatteryVoltage(dupTimes, dupVolts, 800); a.Level != LevelNormal {
+	dupRPM := []float64{800, 800, 800, 800, 800}
+	if a := CheckBatteryVoltage(dupTimes, dupVolts, dupRPM); a.Level != LevelNormal {
 		t.Errorf("expected normal (slope error), got %+v", a)
 	}
 }

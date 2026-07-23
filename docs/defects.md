@@ -369,3 +369,47 @@ next to the existing car-application meta-data. Regression test:
 `CarMonitorCarAppServiceTest` asserts the manifest's parsed
 `ApplicationInfo.metaData` contains that key — Robolectric parses the
 real manifest, so this catches the gap without needing a real host.
+
+## Trend / anomaly detection
+
+**False "alternator failed" CRITICAL alert risk from a normal auto
+idle-stop restart**, found by replaying real fleet data
+(`car_monitor_logs`, see `CLAUDE.md`) at full timestamp resolution
+rather than reading it in aggregate. Symptom: `internal/monitor`'s
+`Evaluate` computed a single "latest RPM" value (independently of which
+voltage reading it would gate) and passed it to
+`trend.CheckBatteryVoltage`, which itself used only its single "latest
+voltage" sample. This vehicle's auto idle-stop drops RPM to 0 at every
+stop and restarts the engine at every light; control module voltage was
+observed sagging as low as 10.82V for 2-3 seconds after every one of
+several real restarts before the alternator caught up — numerically
+identical to the "alternator failed" CRITICAL threshold (<12.0V while
+running). Root cause had two layers: (1) RPM and voltage are read at
+different instants within a poll cycle, so an independently-"latest"
+RPM value could reflect a different moment than the voltage sample it
+gated; (2) even *correct* nearest-timestamp pairing wasn't sufficient by
+itself — replaying the data with proper pairing still left 3 false-
+positive instances, because the low voltage really was the genuine
+reading at that instant (real post-crank alternator recovery lag, not
+stale data). Fix: `CheckBatteryVoltage` now takes a `rpms` series paired
+by nearest timestamp to `voltages` (via `monitor.pairSeries`, the same
+join already used for fuel trims and O2 sensors) *and* requires the
+engine to have been continuously running for at least
+`voltageSettleSeconds` (8s, comfortably past the ~3s longest recovery
+observed) before trusting a single-value voltage threshold — derived by
+scanning the paired RPM series backward for the last time it was at or
+below the running threshold. The windowed decay/trend check is
+unaffected (a multi-second transient can't satisfy its 5-sample/120s/R²
+requirements). See `DESIGN.md` section 4 step 6 for the current
+anomaly-check flow. Regression tests:
+`TestEvaluateBatteryVoltageIgnoresRestartTransient` (monitor,
+end-to-end) and the settle-window cases in `TestCheckBatteryVoltage`
+(trend, unit-level).
+
+Note: `CheckCatalyticConverter`'s RPM/coolant gate has the same
+independently-"latest" pattern as the original bug, but wasn't fixed
+here — real fleet data shows this vehicle's ECU doesn't report PID
+`0x05` (Coolant Temperature) or `0x14` (O2 Sensor Bank 1 Sensor 1) as
+supported at all (confirmed by decoding the raw discovery bitmask
+response), so that check never runs in practice and the gap is
+currently unreachable.
