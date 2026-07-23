@@ -410,6 +410,102 @@ func TestFeedMultipleReadingsInOneCall(t *testing.T) {
 	}
 }
 
+// Reproduces the real-world adapter behavior that capped the logged
+// decode percentage at ~50% even on a healthy session: despite ATL0
+// ("line feeds off") in InitCommands, the adapter still terminates every
+// response with "\r\n" rather than bare "\r". Before stripping the
+// paired '\n', each real response was followed by a permanently-
+// undecodable blank "line", inflating linesReceived without ever
+// touching linesDecoded. See docs/defects.md.
+func TestFeedSwallowsLineFeedAfterCarriageReturn(t *testing.T) {
+	s, readings := collectingSession()
+
+	s.Feed([]byte("41 0C 1A F8\r\n41 0D 50\r\n"))
+
+	if len(*readings) != 2 {
+		t.Fatalf("got %d readings, want 2: %+v", len(*readings), *readings)
+	}
+	if s.linesReceived != 2 {
+		t.Errorf("linesReceived = %d, want 2 (the paired '\\n' must not count as its own line)", s.linesReceived)
+	}
+	if s.linesDecoded != 2 {
+		t.Errorf("linesDecoded = %d, want 2", s.linesDecoded)
+	}
+}
+
+// Bluetooth reads can split a "\r\n" pair across two Feed calls — the
+// '\r' arrives at the very end of one read, and the '\n' opens the next.
+// skipLeadingLF must still catch it in that case, not just when both
+// bytes land in the same call.
+func TestFeedSwallowsLineFeedSplitAcrossCalls(t *testing.T) {
+	s, readings := collectingSession()
+
+	s.Feed([]byte("41 0C 1A F8\r"))
+	s.Feed([]byte("\n41 0D 50\r"))
+
+	if len(*readings) != 2 {
+		t.Fatalf("got %d readings, want 2: %+v", len(*readings), *readings)
+	}
+	if s.linesReceived != 2 {
+		t.Errorf("linesReceived = %d, want 2 (a '\\n' opening the next call must not count as its own line)", s.linesReceived)
+	}
+}
+
+// An empty/nil Feed call arriving between the '\r' and its paired '\n'
+// must not clear skipLeadingLF prematurely — it hasn't actually seen
+// the next byte yet, so clearing it here would let the '\n' through as
+// its own phantom blank line once it does arrive.
+func TestFeedSwallowsLineFeedAcrossEmptyIntermediateCall(t *testing.T) {
+	s, readings := collectingSession()
+
+	s.Feed([]byte("41 0C 1A F8\r"))
+	s.Feed(nil)
+	s.Feed([]byte("\n41 0D 50\r"))
+
+	if len(*readings) != 2 {
+		t.Fatalf("got %d readings, want 2: %+v", len(*readings), *readings)
+	}
+	if s.linesReceived != 2 {
+		t.Errorf("linesReceived = %d, want 2 (an intervening empty Feed call must not clear skipLeadingLF)", s.linesReceived)
+	}
+}
+
+// Ordinary data arriving at a chunk boundary right after a '\r' (not a
+// '\n') must be treated as the start of the next real line, not
+// mistaken for — or eaten alongside — the CRLF-pairing logic.
+func TestFeedHandlesNonLineFeedByteAtCallBoundary(t *testing.T) {
+	s, readings := collectingSession()
+
+	s.Feed([]byte("41 0C 1A F8\r"))
+	s.Feed([]byte("41 0D 50\r"))
+
+	if len(*readings) != 2 {
+		t.Fatalf("got %d readings, want 2: %+v", len(*readings), *readings)
+	}
+	if (*readings)[1].Value != 80.0 {
+		t.Errorf("second reading.Value = %v, want 80 (ordinary data at a call boundary must not be eaten)", (*readings)[1].Value)
+	}
+	if s.linesReceived != 2 {
+		t.Errorf("linesReceived = %d, want 2", s.linesReceived)
+	}
+}
+
+// A genuine blank response (bare "\r\r", no line feed involved) must
+// still count as a received-but-undecodable line — only a '\n' directly
+// paired with the preceding '\r' is adapter noise to swallow.
+func TestFeedStillCountsGenuineBlankLine(t *testing.T) {
+	s, readings := collectingSession()
+
+	s.Feed([]byte("\r41 0C 1A F8\r"))
+
+	if len(*readings) != 1 {
+		t.Fatalf("got %d readings, want 1: %+v", len(*readings), *readings)
+	}
+	if s.linesReceived != 2 {
+		t.Errorf("linesReceived = %d, want 2 (the leading blank line must still be counted)", s.linesReceived)
+	}
+}
+
 // TestNewSessionWithLoggerLogsDiscoveryStart verifies that NewSessionWithLogger
 // invokes the provided logf at construction time (the "discovery starting" line)
 // and that discoveryRangeList is exercised (it formats the list of ranges).

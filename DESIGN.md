@@ -202,6 +202,15 @@ engine reports state/permission/timeout events through.
    handing each line to discovery/decode, while still logging the raw,
    unstripped bytes for diagnostics. See `docs/defects.md` for the
    "adapter is sending data, app writes nothing" incident this fixes.
+
+   `ATL0` above asks the adapter for bare `\r` line endings, but not
+   every adapter honors it — some still terminate every response with
+   `\r\n`. `Feed` swallows a `\n` immediately following the `\r` before
+   counting a line (via `skipLeadingLF`, which also covers the case
+   where the two bytes arrive split across separate reads), so this
+   never surfaces as a permanently-undecodable blank line paired with
+   every real one. See `docs/defects.md` for the ~50%-decode-ceiling
+   incident this fixes.
 6. Independently, a periodic `anomalyCheckLoop` (`ANOMALY_CHECK_INTERVAL_MS`,
    60s) calls `Session.CheckAnomalies()`, which re-reads today's CSV
    (`storage.LoadReadings`), groups it into per-metric time series via

@@ -63,6 +63,33 @@ a leading `>` before parsing, applied after the raw-line diagnostic log
 so that still shows the unstripped bytes actually received. See
 `DESIGN.md` section 4 step 5.
 
+**Decode percentage stuck around 50% on an otherwise-healthy session**
+(discovered from a real `car_monitor_logs` export on versionName 0.111,
+well after the two bugs above were fixed). Symptom: readings were
+landing in the CSV correctly, but `obd2: stats` logs never climbed
+past ~45-50%, even over a long, stable session with no adapter
+disconnects. The raw first-20-lines log showed why: every real response
+line was immediately followed by a separate blank line (e.g. `"41 00
+B6 3F A8 13 "` then `""`), consistently, for the whole session. Root
+cause: `InitCommands()` sends `ATL0` ("line feeds off"), but this
+particular adapter terminates responses with `\r\n` regardless — and
+`Feed` split strictly on `\r`, so the stranded `\n` became its own
+zero-content "line" once the next `\r` arrived. That line can never
+parse as a `Reading` (`parseResponseBytes` requires ≥2 fields), so it
+was correctly excluded from `linesDecoded` but still counted in
+`linesReceived`, capping the ratio at ~50% by construction of the stat
+— not because half of requested PIDs were actually going unanswered.
+Fix: `Feed` now swallows a `\n` immediately following the terminating
+`\r` before counting a line, via `skipLeadingLF` (also handles the case
+where the two bytes arrive split across separate Bluetooth reads/`Feed`
+calls). A genuine blank response (bare `\r\r`, no line feed) is still
+counted, since only a `\n` directly paired with the preceding `\r` is
+adapter noise. Senior-engineer review caught that `skipLeadingLF` must
+*not* be cleared by an empty/nil intervening `Feed` call that hasn't
+actually seen the deciding byte yet — an unconditional reset there would
+let the `\n` back through as its own phantom line the next time `Feed`
+ran with real data. See `DESIGN.md` section 4 step 5.
+
 ## Bluetooth device scanning / pairing
 
 Three rounds of "the scan button doesn't work" reports against the

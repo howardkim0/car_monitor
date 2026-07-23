@@ -98,6 +98,11 @@ type Session struct {
 	linesReceived uint64
 	linesDecoded  uint64
 
+	// skipLeadingLF is set when a line-terminating '\r' was the last byte
+	// available in a Feed call, so whether a paired '\n' follows it won't
+	// be known until the next call. See Feed's CRLF handling.
+	skipLeadingLF bool
+
 	mu               sync.Mutex
 	discoveryStart   time.Time
 	unresolvedRanges map[byte]bool // discovery-query PID -> still awaiting a response
@@ -269,12 +274,33 @@ func InitCommands() []string {
 // every complete (terminator-delimited) line. Partial lines are buffered
 // until the remainder arrives in a later call.
 //
+// Some adapters send a line feed after the carriage return (despite
+// ATL0), which has no content of its own but would otherwise surface as
+// a spurious, permanently-undecodable extra line paired with every real
+// one — capping the decode percentage Feed logs below at ~50% regardless
+// of how well the adapter is actually responding. Feed swallows a '\n'
+// immediately following '\r' so it's never counted as a received line;
+// skipLeadingLF handles the case where the '\r' was the last byte of one
+// call and the '\n' arrives at the start of the next.
+//
 // Content diagnostics: Feed tracks raw reception and successful parsing
 // rates for visibility into adapter behavior (DESIGN.md §12). The first
 // rawLineSampleLimit lines have their exact byte content logged, and
 // every statsLogEveryNLines lines a cumulative log reports received vs.
 // decoded counts and the decode percentage.
 func (s *Session) Feed(data []byte) {
+	// Guarded by len(data) > 0, not just checked inside: an empty/nil
+	// call must leave skipLeadingLF exactly as it was, since it hasn't
+	// actually seen whether the next byte is the paired '\n' yet —
+	// clearing it unconditionally would let a stranded '\n' through as
+	// its own line if Feed is ever called with no data in between.
+	if len(data) > 0 {
+		if s.skipLeadingLF && data[0] == '\n' {
+			data = data[1:]
+		}
+		s.skipLeadingLF = false
+	}
+
 	s.pending = append(s.pending, data...)
 	for {
 		idx := bytes.IndexByte(s.pending, terminator)
@@ -282,7 +308,13 @@ func (s *Session) Feed(data []byte) {
 			break
 		}
 		line := s.pending[:idx]
-		s.pending = s.pending[idx+1:]
+		remainder := s.pending[idx+1:]
+		if len(remainder) == 0 {
+			s.skipLeadingLF = true
+		} else if remainder[0] == '\n' {
+			remainder = remainder[1:]
+		}
+		s.pending = remainder
 
 		// Track reception: every line extracted increments the count.
 		s.linesReceived++
